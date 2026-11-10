@@ -82,17 +82,23 @@ if ($Build) {
     $env:PATH = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin;" +
                 "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;" +
                 "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;" + $env:PATH
-    $output = & cmake --build --preset win-amd64-release --parallel 8 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        Fail "cmake --build failed; run it by hand for the full output"
-    } else {
-        Pass "build"
-        $second = & cmake --build --preset win-amd64-release --parallel 8 2>&1 | Out-String
-        if ($second -match "Generating recompiled code") {
-            Fail "the second build re-ran the codegen (the stamp fix in cmake/refresh_codegen_stamp.cmake regressed)"
+    Push-Location $root
+    try {
+        $output = & cmake --build --preset win-amd64-release --parallel 8 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ($output -split "`n" | Select-Object -Last 30 | Out-String)
+            Fail "cmake --build failed (the output above is the tail)"
         } else {
-            Pass "the second build did no work"
+            Pass "build"
+            $second = & cmake --build --preset win-amd64-release --parallel 8 2>&1 | Out-String
+            if ($second -match "Generating recompiled code") {
+                Fail "the second build re-ran the codegen (the stamp fix in cmake/refresh_codegen_stamp.cmake regressed)"
+            } else {
+                Pass "the second build did no work"
+            }
         }
+    } finally {
+        Pop-Location
     }
 }
 
