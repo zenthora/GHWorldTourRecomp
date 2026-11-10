@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A0F08"/>
+      <stop offset="0.55" stop-color="#0D0907"/>
+      <stop offset="1" stop-color="#070505"/>
+    </linearGradient>
+    <radialGradient id="spot" cx="0.5" cy="0.05" r="0.85">
+      <stop offset="0" stop-color="#F26A1B" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#B5460F" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB066" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#F26A1B" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="pick" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFB066"/>
+      <stop offset="0.55" stop-color="#F26A1B"/>
+      <stop offset="1" stop-color="#8E3306"/>
+    </linearGradient>
+    <radialGradient id="crowd" cx="0.5" cy="0.2" r="0.9">
+      <stop offset="0" stop-color="#E86A1E" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="760" fill="url(#bg)"/>
+  <rect width="1280" height="760" fill="url(#spot)"/>
+
+  <polygon points="520,0 610,0 300,760 180,760" fill="url(#beam)"/>
+  <polygon points="760,0 850,0 1100,760 980,760" fill="url(#beam)"/>
+  <polygon points="640,0 676,0 720,760 620,760" fill="url(#beam)" opacity="0.6"/>
+
+  <circle cx="300" cy="90" r="46" fill="#FFB066" opacity="0.16"/>
+  <circle cx="300" cy="90" r="18" fill="#FFD3A6" opacity="0.5"/>
+  <circle cx="980" cy="90" r="46" fill="#FFB066" opacity="0.16"/>
+  <circle cx="980" cy="90" r="18" fill="#FFD3A6" opacity="0.5"/>
+
+  <g transform="translate(640 420)">
+    <path d="M0 -230 C 104 -206 178 -120 178 -24 C 178 120 92 214 0 268 C -92 214 -178 120 -178 -24 C -178 -120 -104 -206 0 -230 Z"
+          fill="url(#pick)" opacity="0.9"/>
+    <path d="M0 -186 C 78 -167 134 -100 134 -24 C 134 92 68 168 0 214 C -68 168 -134 92 -134 -24 C -134 -100 -78 -167 0 -186 Z"
+          fill="#0B0908" opacity="0.82"/>
+    <path d="M-74 -150 L -8 -22 L -38 -14 L 58 148 L 20 -4 L 52 -12 Z" fill="#FFB066" opacity="0.9"/>
+    <g stroke="#FFD3A6" stroke-opacity="0.5" stroke-width="3">
+      <line x1="-96" y1="-186" x2="-96" y2="196"/>
+      <line x1="-56" y1="-206" x2="-56" y2="230"/>
+      <line x1="0" y1="-214" x2="0" y2="252"/>
+      <line x1="56" y1="-206" x2="56" y2="230"/>
+      <line x1="96" y1="-186" x2="96" y2="196"/>
+    </g>
+  </g>
+
+  <rect y="620" width="1280" height="140" fill="url(#crowd)"/>
+  <g fill="#050404" opacity="0.95">
+    <path d="M0 760 L0 690 Q 40 640 80 690 Q 110 650 140 694 Q 180 630 220 692 Q 250 648 285 696 Q 330 628 375 694 Q 410 654 445 698 Q 490 640 530 696 Q 570 652 610 700 Q 650 636 690 698 Q 730 652 770 700 Q 810 636 850 696 Q 890 652 930 700 Q 970 636 1010 696 Q 1050 650 1090 700 Q 1130 642 1170 696 Q 1210 656 1250 700 L 1280 690 L 1280 760 Z"/>
+  </g>
+  <g fill="#0A0706" stroke="#F26A1B" stroke-opacity="0.25" stroke-width="2">
+    <path d="M120 760 L136 690 Q 150 662 164 690 L 180 760 Z"/>
+    <path d="M240 760 L252 700 Q 264 674 276 700 L 288 760 Z"/>
+    <path d="M1000 760 L1014 692 Q 1026 666 1038 692 L 1052 760 Z"/>
+    <path d="M1120 760 L1132 700 Q 1144 674 1156 700 L 1168 760 Z"/>
+  </g>
+</svg>

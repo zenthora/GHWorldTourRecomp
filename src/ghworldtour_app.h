@@ -1,0 +1,99 @@
+// ghworldtour - the app: the SDK's virtual hooks (rex::ReXApp).
+
+#pragma once
+
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/logging.h>
+#include <rex/rex_app.h>
+
+#include "keyboard.h"
+#include "project.h"
+#include "startup.h"
+
+class GhworldtourApp : public rex::ReXApp {
+ public:
+  using rex::ReXApp::ReXApp;
+
+  static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    return std::unique_ptr<GhworldtourApp>(new GhworldtourApp(ctx, "ghworldtour", PPCImageConfig));
+  }
+
+  // Use the "xenos" GPU emulation (rexgpu-xenos.dll) unless another one was given, and report a
+  // plain gamepad as a guitar: GHWT refuses a gamepad ("You must use a Guitar Controller to
+  // continue"), and a guitar's whammy bar rests at -32768. Command-line options and the launcher's
+  // options still win (the latter load in SetupEnvironment).
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (config.gpu_plugin.empty()) {
+      config.gpu_plugin = "xenos";
+    }
+    if (rex::cvar::Query<int32_t>("gamepad_subtype") == 0) {
+      rex::cvar::SetFlagByName("gamepad_subtype", "6");
+    }
+    if (!rex::cvar::Query<bool>("gamepad_whammy_rest")) {
+      rex::cvar::SetFlagByName("gamepad_whammy_rest", "true");
+    }
+    // GHWT's FMOD mixes into a ring of two 256-sample blocks and checks whether the output has read
+    // the other one; the PC device frees frames two at a time, so without the console's 3 ms
+    // spacing FMOD misses the transitions and the music from the title screen on plays as noise
+    // (the reference's docs/menu-music.md). Command-line and config values still win.
+    if (rex::cvar::GetFlagSource("audio_callback_min_interval_us") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_callback_min_interval_us", "3000");
+    }
+    // The audio worker and the XMA decoder in Windows' "Pro Audio" class: a busy PC holds them up
+    // less.
+    if (rex::cvar::GetFlagSource("audio_thread_priority") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_thread_priority", "true");
+    }
+    REXLOG_INFO("[audio] callback spacing {} us, thread priority {}",
+                rex::cvar::Query<int32_t>("audio_callback_min_interval_us"),
+                rex::cvar::Query<bool>("audio_thread_priority") ? "on" : "off");
+    // The frets that "strum with the frets" presses (the launcher's switch writes the targets). On
+    // by default: GHWT has no auto-strum, so a controller or the keyboard would have to strum and
+    // fret at once. The strum is gated to songs (src/keyboard.cpp), so the menus' D-pad is
+    // unaffected.
+    if (rex::cvar::GetFlagSource("mnk_tap_sources") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("mnk_tap_sources", "a,b,y,x,lb");
+    }
+    if (rex::cvar::GetFlagSource("gamepad_tap_sources") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("gamepad_tap_sources", "a,b,y,x,lb");
+    }
+    if (rex::cvar::GetFlagSource("mnk_tap_target") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("mnk_tap_target", "dpad_down");
+    }
+    if (rex::cvar::GetFlagSource("gamepad_tap_target") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("gamepad_tap_target", "dpad_down");
+    }
+  }
+
+  // Game files: assets/ next to the executable or the repository's assets/. User data: userdata/
+  // next to the executable; the saves, settings and achievements in the launchers' current profile.
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    if (paths.game_data_root.empty()) {
+      paths.game_data_root = ghworldtour::DefaultGameRoot();
+    }
+    ghworldtour::ConfigureUserData(paths.user_data_root, paths.cache_root);
+    ghworldtour::ConfigureProfile(paths.user_data_root);
+  }
+
+  // After the SDK loads the base config: GH World Tour Launcher's options, before the window and
+  // the GPU are created.
+  bool SetupEnvironment() override {
+    if (!rex::ReXApp::SetupEnvironment()) {
+      return false;
+    }
+    REXLOG_INFO("[startup] Game files: {}", game_data_root().string());
+    REXLOG_INFO("[startup] User data: {}", user_data_root().string());
+    ghworldtour::LoadLauncherOptions(rex::filesystem::GetExecutableFolder() / GAME_OPTIONS);
+    return true;
+  }
+
+  // The window title (the SDK sets "<app name> <SDK build stamp>").
+  void OnPostSetup() override {
+    if (window()) {
+      window()->SetTitle(GAME_TITLE);
+    }
+    // The "strum with the frets" option's gate: only in a song (src/keyboard.cpp).
+    ghworldtour::InitializeKeyboard();
+  }
+};

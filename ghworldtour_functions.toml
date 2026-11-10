@@ -1,0 +1,38 @@
+# ghworldtour_functions.toml - Manual corrections for the analyzer (default.xex).
+#
+# Add functions the analyzer missed, [[switch_tables]] it mistranslates and
+# [[midasm_hook]]s into src/.
+
+[functions]
+# Branch (b) targets that the automatic analysis did not assign to any function, reported by
+# the codegen's Validate phase (UnresolvedCall). Each is a tail-call destination; declare it so
+# the branch resolves to a real function.
+0x82376590 = {}   # branched to from 0x823B143C
+0x822215D8 = {}   # branched to from 0x8222252C
+0x8246E508 = {}   # branched to from 0x823272D4, 0x823272F0
+0x8221BD70 = {}   # branched to from 0x822215AC
+0x8237AAD0 = {}   # branched to from 0x824037E8
+0x82376620 = {}   # branched to from 0x823B166C
+0x822233D0 = {}   # branched to from 0x82223794
+
+# Alternate entry point inside sub_82213E40 (0x82213E40-0x82213ED4): the game calls 0x82213E60
+# directly (fatal "unregistered function" from the smoke test), so split it out as a chunk.
+0x82213E60 = { parent = 0x82213E40, end = 0x82213ED4 }
+
+# Second thunk in sub_821967F8's range: the analyzer merged the 4-instruction tail thunk at
+# 0x821967F8 (mr/mr/mr/b 0x8230F3E8) with another 4-instruction thunk at 0x82196808. The intro
+# cards call 0x82196808 directly (fatal "unregistered function" at the ATVI/Neversoft cards).
+0x82196808 = { parent = 0x821967F8, end = 0x82196818 }
+
+# Function the analyzer missed between sub_82241038 (which ends exactly at 0x82241060) and
+# sub_82241078. The quick-play menus call it directly (fatal "unregistered function" when
+# START/Options starts a session).
+0x82241060 = { end = 0x82241078 }
+
+# A player's update in a song, every frame (sub_82131658, the equivalent of GH Metallica's
+# sub_82137F18: it calls sub_8213AB08 first, as that one calls sub_821416A0). The hook marks the
+# time so the "strum with the frets" option only strums in a song, not in the menus (src/keyboard.cpp).
+[[midasm_hook]]
+address = 0x82131658   # mflr r12 (sub_82131658)
+name = "GHWorldTourSongFrameHook"
+

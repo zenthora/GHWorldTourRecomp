@@ -1,0 +1,5 @@
+# ghworldtour_functions_auto.toml - generated from the XEX image by a gap finder (do not edit by hand)
+# Code between functions that the analyzer did not assign, split at blr/bctr/b.
+# Empty until a gap finder has run on this disc.
+
+[functions]

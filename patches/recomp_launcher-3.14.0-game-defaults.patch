@@ -1,0 +1,70 @@
+diff --git a/settings.cpp b/settings.cpp
+index d47cccc..bfcdec4 100644
+--- a/settings.cpp
++++ b/settings.cpp
+@@ -163,7 +163,7 @@ void ResetKeyboard(Options& o) {
+   for (int i = 0; i < int(Bind::kCount); ++i) {
+     o.binds[i] = DefaultKeys(i);
+   }
+-  o.keyboard_tap = false;
++  o.keyboard_tap = game::kKeyboardTapDefault;  // Local change: a game's own default (game.h)
+   o.mnk_mouse = false;
+   o.mnk_sensitivity = 1.0f;
+ }
+@@ -299,8 +299,12 @@ Options OptionsFromConfig(const Config& c, unsigned primary_dpi) {
+     o.window = {MulDiv(window_width, int(primary_dpi), 96), MulDiv(window_height, int(primary_dpi), 96)};
+   }
+   o.vulkan = GetString(c, "gpu_backend") == "vulkan";
+-  o.vsync = game::kHasNativeXRenderer ? GetString(c, "native_x_renderer_present_mode") != "immediate"
+-                                      : !GetBool(c, "d3d12_allow_variable_refresh_rate_and_tearing", false);
++  // Local change for GHWorldTourRecomp: a game's own defaults (game.h, kVsyncDefault).
++  o.vsync = game::kHasNativeXRenderer
++                ? (GetString(c, "native_x_renderer_present_mode").empty()
++                       ? game::kVsyncDefault
++                       : GetString(c, "native_x_renderer_present_mode") != "immediate")
++                : !GetBool(c, "d3d12_allow_variable_refresh_rate_and_tearing", !game::kVsyncDefault);
+   if (*game::kFrameRateCvar) {
+     int value = game::kFrameRateIsBool
+                     ? int(GetBool(c, game::kFrameRateCvar, game::kFrameRateDefault != 0))
+@@ -394,8 +398,14 @@ Options OptionsFromConfig(const Config& c, unsigned primary_dpi) {
+     auto it = c.find(kBinds[i].cvar);
+     o.binds[i] = it != c.end() ? it->second : DefaultKeys(i);
+   }
+-  o.keyboard_tap = *game::kKeyboardTapTarget && !GetString(c, "mnk_tap_target").empty();
+-  o.gamepad_tap = *game::kKeyboardTapTarget && !GetString(c, "gamepad_tap_target").empty();
++  // Local change for GHWorldTourRecomp: a game's own defaults (game.h, kKeyboardTapDefault and
++  // kGamepadTapDefault), used when the options file has never had the key.
++  o.keyboard_tap = *game::kKeyboardTapTarget &&
++                   (c.find("mnk_tap_target") != c.end() ? !GetString(c, "mnk_tap_target").empty()
++                                                        : game::kKeyboardTapDefault);
++  o.gamepad_tap = *game::kKeyboardTapTarget &&
++                  (c.find("gamepad_tap_target") != c.end() ? !GetString(c, "gamepad_tap_target").empty()
++                                                           : game::kGamepadTapDefault);
+ 
+   o.gamepad_remap = GetString(c, "gamepad_remap");
+   o.device_remap = GetEscapedString(c, "gamepad_device_remap");
+diff --git a/settings.h b/settings.h
+index da18c31..beb91e7 100644
+--- a/settings.h
++++ b/settings.h
+@@ -125,7 +125,7 @@ struct Options {
+   // V-Sync: frames shown once, never torn (NativeXRenderer's present mode "vsync", D107: FIFO; the SDK's presenters
+   // without their tearing modes; the game's vertical blank following the monitor's, vblank_follows_display), or each
+   // shown as it is ready ("immediate": IMMEDIATE, tearing).
+-  bool vsync = true;
++  bool vsync = game::kVsyncDefault;  // Local change: a game's own default (game.h)
+   bool native = game::kHasNativeXRenderer && game::kNativeXRendererDefault;  // native_x_renderer: NativeXRenderer draws
+   // native_x_renderer_antialiasing without a temporal upscaler: a NativeAntialiasing.
+   int native_aa = kSmaa;
+@@ -160,9 +160,9 @@ struct Options {
+   bool mnk = false;
+   bool mnk_mouse = false;
+   // The keyboard's frets strum as they are pressed (game::kKeyboardTapTarget: the SDK's mnk_tap_target).
+-  bool keyboard_tap = false;
++  bool keyboard_tap = game::kKeyboardTapDefault;  // Local change: a game's own default (game.h)
+   // The same for every controller playing guitar (game::kKeyboardTapTarget: the SDK's gamepad_tap_target).
+-  bool gamepad_tap = false;
++  bool gamepad_tap = game::kGamepadTapDefault;  // Local change: a game's own default (game.h)
+   float mnk_sensitivity = 1.0f;
+   std::array<std::string, int(Bind::kCount)> binds;
+ 
