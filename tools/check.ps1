@@ -44,7 +44,8 @@ if (-not $formatter) {
 } else {
     $sources = @()
     foreach ($dir in @("src", "launcher")) {
-        $sources += Get-ChildItem -LiteralPath (Join-Path $root $dir) -Include *.cpp, *.h -File -Recurse
+        $sources += Get-ChildItem -LiteralPath (Join-Path $root $dir) -File -Recurse |
+            Where-Object { $_.Extension -in ".cpp", ".h" }
     }
     $bad = @()
     foreach ($file in $sources) {
