@@ -42,7 +42,7 @@ also needs the SDK's headers and Dear ImGui sources: `RECOMP_LAUNCHER_SDK_DIR` (
 
 ```powershell
 # copy your game files into assets\ first: the build recompiles assets\default.xex
-git clone https://github.com/ElGuslml/RecompLauncher.git recomp_launcher   # once
+git submodule update --init --recursive                    # recomp_launcher
 cmake --preset win-amd64-release
 cmake --build --preset win-amd64-release --parallel 8
 ```
@@ -136,8 +136,8 @@ wrong defaults.
 
 ## The launcher
 
-- `recomp_launcher/` is RecompLauncher's code (`git clone` into that directory; it is a submodule in
-  [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp)).
+- `recomp_launcher/` is RecompLauncher's code (a git submodule, `git submodule update --init --recursive`),
+  kept clean; this game's additions come from `patches/`.
 - `launcher/game.h` is this game's profile: names, disc check (title ID, CRC, size), frame size, languages, keyboard
   default, microphones, and the texts.
 - `launcher/game.cpp` holds the launcher's texts; `launcher/palette.h` its colors; `launcher/art/background.svg` its

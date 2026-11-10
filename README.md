@@ -26,10 +26,10 @@ Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build thi
    cmake --install out/build/win-amd64 --config Release
    ```
 
-2. Clone the launcher's code into `recomp_launcher/`:
+2. Get the launcher's code into `recomp_launcher/` (a submodule):
 
    ```powershell
-   git clone https://github.com/ElGuslml/RecompLauncher.git recomp_launcher
+   git submodule update --init --recursive
    ```
 
 3. Build the game and the launcher (the game's files must be in `assets/` first):
