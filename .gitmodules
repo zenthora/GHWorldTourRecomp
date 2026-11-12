@@ -2,3 +2,6 @@
 	path = recomp_launcher
 	url = https://github.com/ElGuslml/RecompLauncher.git
 	ignore = dirty
+[submodule "native_x_renderer"]
+	path = native_x_renderer
+	url = https://github.com/ElGuslml/NativeXRenderer.git

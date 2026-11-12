@@ -12,6 +12,17 @@
   first run includes the video calibration screen.
 - Use `tools/scenario.ps1`; it does all of the above and reports the FATAL address.
 
+## Screenshots
+
+Each shot is written twice: `<name>.png` at the window's size, and `<name>-review.png` at most 640 pixels
+wide. Read the review copy. The full-size PNG is a few megabytes and a 2560x1440 one is enough to blow a
+session's context out; the review copy is a few hundred KB and shows the same thing.
+
+A capture is only evidence when the game drew it. `tools/scenario.ps1` re-foregrounds the window before
+every shot and fails the run when the image is one flat colour (the window is minimised or the game never
+drew) or the game was not the foreground window (another window is in the capture - reading such a shot as
+the game's output has happened).
+
 ## Logs
 
 `out/build/win-amd64-release/logs/ghworldtour_NNN.log`, one per run. A missing function reads:
@@ -22,6 +33,19 @@
 
 Look the address up with `python tools/where.py 0x82241060`, add a correction to
 `ghworldtour_functions.toml`, run the codegen, rebuild.
+
+### Is the renderer in a 3D view?
+
+With `--native_x_renderer=true`, NativeXRenderer logs one line when the 3D view's state changes (D139):
+
+- `3D view: none` — a menu or a video;
+- `3D view: found, but its upscale point 0x824ae0d0 did not run this frame` — a view started but did not reach
+  the profile's boundary (the first rejected resolve logs why);
+- `3D view: upscaled at the profile's point 0x824ae0d0` — DLSS/FSR 3.1 ran on the view (only with a temporal mode).
+
+`renderer: frame N: D draw calls` is the other state signal: menus and attract screens stay under ~150,
+a song runs 290-660. `--native_x_renderer_trace_interval=60` (instead of the default 600) prints it every
+second, which makes a scenario run readable while it happens.
 
 ## Frame timing
 

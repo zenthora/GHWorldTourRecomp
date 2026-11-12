@@ -22,31 +22,27 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x
     add_compile_options(-march=x86-64-v2)
 endif()
 
-# Locate the SDK. REXSDK_DIR is the SDK's source tree (the SDK is built with the game); without it,
-# generated/rexglue.cmake falls back to find_package(rexglue), and the sibling installed SDK is added
-# to CMAKE_PREFIX_PATH so a checkout of this project next to rexglue-sdk builds without extra setup.
+# Locate the SDK. NativeXRenderer compiles the SDK's graphics sources (the SPIR-V translator among them)
+# in process, and an installed SDK package does not carry those sources, so the recomp fork's source tree
+# is used: REXSDK_DIR when set, thirdparty/rexglue-sdk when present, or the sibling rexglue-sdk-recomp.
 if(NOT REXSDK_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk/CMakeLists.txt")
     set(REXSDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk" CACHE PATH
         "Path to the rexglue-sdk source tree" FORCE)
 endif()
 if(NOT REXSDK_DIR)
-    set(GHWORLDTOUR_SDK_INSTALL_DIR "" CACHE PATH "Installed rexglue-sdk (out/install/win-amd64)")
-    if(NOT GHWORLDTOUR_SDK_INSTALL_DIR)
-        foreach(candidate
-                "${CMAKE_CURRENT_SOURCE_DIR}/../rexglue-sdk-recomp/out/install/win-amd64"
-                "${CMAKE_CURRENT_SOURCE_DIR}/../rexglue-sdk/out/install/win-amd64")
-            if(EXISTS "${candidate}/lib/cmake/rexglue/rexglueConfig.cmake")
-                set(GHWORLDTOUR_SDK_INSTALL_DIR "${candidate}")
-                break()
-            endif()
-        endforeach()
-    endif()
-    if(GHWORLDTOUR_SDK_INSTALL_DIR AND
-       EXISTS "${GHWORLDTOUR_SDK_INSTALL_DIR}/lib/cmake/rexglue/rexglueConfig.cmake")
-        list(PREPEND CMAKE_PREFIX_PATH "${GHWORLDTOUR_SDK_INSTALL_DIR}")
-        message(STATUS "Using the installed ReXGlue SDK at ${GHWORLDTOUR_SDK_INSTALL_DIR}")
+    set(GHWORLDTOUR_SDK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../rexglue-sdk-recomp" CACHE PATH
+        "The rexglue-sdk recomp source tree (built with the game and NativeXRenderer)")
+    if(EXISTS "${GHWORLDTOUR_SDK_SOURCE_DIR}/RECOMP.md")
+        set(REXSDK_DIR "${GHWORLDTOUR_SDK_SOURCE_DIR}" CACHE PATH
+            "Path to the rexglue-sdk source tree" FORCE)
     endif()
 endif()
+if(NOT REXSDK_DIR OR NOT EXISTS "${REXSDK_DIR}/RECOMP.md")
+    message(FATAL_ERROR
+        "The rexglue-sdk recomp source tree was not found. Clone ElGuslml/rexglue-sdk (branch recomp) "
+        "next to this project as rexglue-sdk-recomp, or set GHWORLDTOUR_SDK_SOURCE_DIR / REXSDK_DIR.")
+endif()
+message(STATUS "Using the ReXGlue SDK source tree at ${REXSDK_DIR}")
 
 # GPU backends for a source build of the SDK (an installed SDK carries the backends it was built with).
 if(WIN32)
@@ -100,6 +96,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GHWORLDTOUR_SO
 # Sources
 set(GHWORLDTOUR_SOURCES
     src/main.cpp
+    src/native_x_renderer_ghworldtour.cpp
     src/startup.cpp
     src/keyboard.cpp
 )
@@ -112,6 +109,14 @@ endif()
 
 rexglue_setup_target(ghworldtour GPU_PLUGINS xenos)
 add_dependencies(ghworldtour ghworldtour_sources_marker ghworldtour_codegen_stamp_fix)
+
+# NativeXRenderer: the native renderer (native_x_renderer/README.md). The game side (hooks and profile)
+# is src/native_x_renderer_ghworldtour.cpp; the game draws on the Xenos path while native_x_renderer is
+# off. The library builds the SDK's graphics sources for the SPIR-V translator in process.
+add_subdirectory(native_x_renderer)
+target_link_libraries(ghworldtour PRIVATE native_x_renderer)
+# AMD FidelityFX's Vulkan runtime next to the executable (DLSS comes from the SDK's copy_dlss_dlls).
+native_x_renderer_copy_runtime(ghworldtour)
 
 # The target and the app keep the short name "ghworldtour" (ghworldtour.toml, logs\ghworldtour_NNN.log);
 # only the executable gets a descriptive name.

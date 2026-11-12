@@ -7,7 +7,10 @@
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 
+#include <native_x_renderer/native_x_renderer.h>
+
 #include "keyboard.h"
+#include "native_x_renderer_ghworldtour.h"
 #include "project.h"
 #include "startup.h"
 
@@ -84,7 +87,19 @@ class GhworldtourApp : public rex::ReXApp {
     }
     REXLOG_INFO("[startup] Game files: {}", game_data_root().string());
     REXLOG_INFO("[startup] User data: {}", user_data_root().string());
+    REXLOG_INFO("[startup] {}", native_x_renderer::Describe());
     ghworldtour::LoadLauncherOptions(rex::filesystem::GetExecutableFolder() / GAME_OPTIONS);
+    return true;
+  }
+
+  // NativeXRenderer's tool modes, run instead of the game (the launcher's "Compiling shaders" and
+  // the developers' pipeline list builder).
+  bool OnToolMode() override {
+    if (!native_x_renderer::ToolModeRequested()) {
+      return false;
+    }
+    native_x_renderer::RunToolMode(ghworldtour::NativeXRendererProfile(), game_data_root(),
+                                   cache_root());
     return true;
   }
 
@@ -93,6 +108,11 @@ class GhworldtourApp : public rex::ReXApp {
     if (window()) {
       window()->SetTitle(GAME_TITLE);
     }
+    // The renderer and the trace/observer; before the guest starts, with the window and the
+    // graphics system up. The Xenos path draws while native_x_renderer is off.
+    native_x_renderer::Initialize(ghworldtour::NativeXRendererProfile(),
+                                  runtime() ? runtime()->graphics_system() : nullptr, window(),
+                                  runtime() ? runtime()->cache_root() : std::filesystem::path());
     // The "strum with the frets" option's gate: only in a song (src/keyboard.cpp).
     ghworldtour::InitializeKeyboard();
   }

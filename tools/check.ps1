@@ -1,7 +1,7 @@
 # Local guardrails for GHWorldTourRecomp. Run before committing (tools/install-hooks.ps1 installs it as
 # the pre-commit hook) and after changing CMake, the launcher patch or the tools.
 #
-#   .\tools\check.ps1              fast: formatting, launcher patch, whitespace, disk
+#   .\tools\check.ps1              fast: formatting, launcher patch, whitespace, submodule, tool scripts, doc paths, disk
 #   .\tools\check.ps1 -Build       also build twice and fail if the second run re-runs the codegen
 #
 # No CI: a full build needs the game disc (assets/default.xex), which cannot be committed.
@@ -67,7 +67,87 @@ if (Test-Path -LiteralPath (Join-Path $root ".git")) {
     Pass "no git repository yet (skipping the whitespace check)"
 }
 
-# 4. Disk: assets + generated + build + the ISO need room.
+# 3b. The NativeXRenderer submodule's changes are committed there. This repository records only its
+# commit: an edit left uncommitted in native_x_renderer/ is in neither this repository's diff nor a
+# reviewer's, and the pre-commit hook would let the parent commit through without it. Commit the
+# submodule first; the parent then records the new commit.
+$submodule = Join-Path $root "native_x_renderer"
+if (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
+    # A pre-commit hook inherits git's index and object environment (GIT_INDEX_FILE, GIT_DIR), which
+    # would make git -C read this repository's index as the submodule's: every submodule file would
+    # look deleted. Ask the submodule for its own repository instead.
+    $saved_git_env = @{}
+    foreach ($name in "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY") {
+        $saved_git_env[$name] = [Environment]::GetEnvironmentVariable($name)
+        # Removed, not set to empty: an empty GIT_INDEX_FILE reads as an index with no entries.
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    }
+    try {
+        $dirty = & git -C $submodule status --porcelain -- . ':(exclude)thirdparty' 2>$null
+    } finally {
+        foreach ($name in $saved_git_env.Keys) {
+            if ($null -ne $saved_git_env[$name]) {
+                [Environment]::SetEnvironmentVariable($name, $saved_git_env[$name])
+            }
+        }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Fail "git status failed in native_x_renderer"
+    } elseif ($dirty) {
+        Fail ("native_x_renderer has uncommitted changes (commit them there; this repository's diff does not show " +
+              "them): " + (($dirty | Select-Object -First 5) -join '; '))
+    } else {
+        Pass "native_x_renderer's changes are committed"
+    }
+}
+
+# 4. The tools parse. They are only ever run against the game (a 205 s intro a go), so a syntax error
+# there costs a run; the parser catches it in milliseconds.
+$toolScripts = Get-ChildItem -LiteralPath (Join-Path $root "tools") -Filter "*.ps1" -File
+$bad = @()
+foreach ($file in $toolScripts) {
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+    if ($errors -and $errors.Count -gt 0) {
+        $first = $errors[0]
+        $bad += "$($file.Name):$($first.Extent.StartLineNumber) $($first.Message)"
+    }
+}
+if ($bad.Count -eq 0) {
+    Pass "$($toolScripts.Count) tool scripts parse"
+} else {
+    Fail "tool scripts do not parse: $($bad -join '; ')"
+}
+
+# 5. The paths AGENTS.md and the docs point at exist. Those files are navigation pointers, and a pointer
+# to a renamed or untracked file sends the next agent nowhere (an untracked helper under out/ once did).
+# Build output (out/, generated/, assets/) is not checked: it only exists after a build or with the disc.
+$docFiles = @(Get-Item -LiteralPath (Join-Path $root "AGENTS.md") -ErrorAction SilentlyContinue)
+$docFiles += Get-ChildItem -LiteralPath (Join-Path $root "docs") -Filter "*.md" -File -ErrorAction SilentlyContinue
+$docFiles += Get-ChildItem -LiteralPath (Join-Path $root "tools") -Filter "*.md" -File -ErrorAction SilentlyContinue
+$prefixes = "docs/", "src/", "tools/", "launcher/", "patches/", "cmake/", "res/"
+$submodulePresent = Test-Path -LiteralPath (Join-Path $root "native_x_renderer/CMakeLists.txt")
+if ($submodulePresent) { $prefixes += "native_x_renderer/" }
+$missing = @()
+foreach ($doc in $docFiles) {
+    $text = Get-Content -LiteralPath $doc.FullName -Raw
+    foreach ($match in [regex]::Matches($text, '`([^`\r\n]+)`')) {
+        $token = $match.Groups[1].Value.Trim()
+        if ($token.IndexOfAny([char[]]'*<>={}') -ge 0) { continue }
+        if ($token.Contains("..") -or $token.Contains(" ")) { continue }
+        if (-not ($prefixes | Where-Object { $token.StartsWith($_) })) { continue }
+        if (-not (Test-Path -LiteralPath (Join-Path $root $token))) {
+            $missing += "$($doc.Name): $token"
+        }
+    }
+}
+if ($missing.Count -eq 0) {
+    Pass "documented paths exist"
+} else {
+    Fail "documented paths are missing: $($missing -join '; ')"
+}
+
+# 6. Disk: assets + generated + build + the ISO need room.
 $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $root.StartsWith($_.Root) } | Select-Object -First 1
 if ($drive) {
     $freeGb = [math]::Round($drive.Free / 1GB, 1)
@@ -78,7 +158,7 @@ if ($drive) {
     }
 }
 
-# 5. Build, and build again: the second run must be a no-op (regression test for the codegen stamp).
+# 7. Build, and build again: the second run must be a no-op (regression test for the codegen stamp).
 if ($Build) {
     $env:PATH = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin;" +
                 "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;" +

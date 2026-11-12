@@ -18,8 +18,8 @@ It is drawn by ReXGlue's emulation of the Xbox 360 GPU, Xenos (derived from [Xen
 
 Use the **recomp fork** of the SDK ([ElGuslml/rexglue-sdk](https://github.com/ElGuslml/rexglue-sdk), branch `recomp`):
 it adds the microphone emulation, launcher profiles, launcher options and the gamepad/keyboard handling the launcher
-configures. The official SDK builds and runs the game, but its `MicDeviceRequest` stub keeps the game polling for a
-microphone.
+configures, and the graphics changes NativeXRenderer needs. The official SDK builds and runs the game, but its
+`MicDeviceRequest` stub keeps the game polling for a microphone.
 
 Build and install it once:
 
@@ -33,19 +33,24 @@ cmake --install out/build/win-amd64 --config Release
 On Windows, `git clone` leaves the libmspack symlinks (in `thirdparty/libmspack/cabextract/mspack`) as text stubs; if
 the build fails on them, replace each stub with the file it names.
 
-The project finds the installed SDK through `GHWORLDTOUR_SDK_INSTALL_DIR` (`out/install/win-amd64`), then
-`REXSDK_DIR` (a source tree, built with the project), then `../rexglue-sdk-recomp`, then `../rexglue-sdk`. The launcher
-also needs the SDK's headers and Dear ImGui sources: `RECOMP_LAUNCHER_SDK_DIR` (default: a sibling
-`rexglue-sdk-recomp`).
+The project builds the SDK from that source tree (`GHWORLDTOUR_SDK_SOURCE_DIR`, default
+`../rexglue-sdk-recomp`; `REXSDK_DIR` overrides it). NativeXRenderer compiles the SDK's graphics sources (the SPIR-V
+translator among them) in process and links the SDK's glslang and xxHash targets, none of which an installed SDK
+package carries, so the installed package is not enough. The launcher also uses the same tree through
+`RECOMP_LAUNCHER_SDK_DIR`.
 
 ## Building
 
 ```powershell
 # copy your game files into assets\ first: the build recompiles assets\default.xex
-git submodule update --init --recursive                    # recomp_launcher
-cmake --preset win-amd64-release
-cmake --build --preset win-amd64-release --parallel 8
+git submodule update --init --recursive                    # recomp_launcher, native_x_renderer
+.\tools\build.ps1                                          # cmake --build --preset win-amd64-release --parallel 8
 ```
+
+`tools/build.ps1` finds the CMake the build tree was configured with (PATH first, then `CMakeCache.txt`, then
+Visual Studio's bundled one), so it works outside a Developer PowerShell; any arguments go to CMake unchanged
+(`.\tools\build.ps1 --build --preset win-amd64-debug --parallel 8`). Configuring once still needs CMake on PATH:
+`cmake --preset win-amd64-release`.
 
 - The first build translates `default.xex` into C++ (`generated/`) and takes a while. If it stops with
   "precompiled header ... has been modified", run the build command again.
@@ -84,7 +89,7 @@ rexglue codegen ghworldtour_manifest.toml
   (Bink) sound right, but from the title screen on the music plays as noise or stutters. The app sets
   `audio_callback_min_interval_us = 3000` (unless the command line or a config sets it) and runs the audio worker in
   Windows' "Pro Audio" class (`audio_thread_priority = true`). This is the same fix as GHMetalRecomp's
-  `docs/menu-music.md`; a fork with FMOD mixing on the audio thread would use 0 instead.
+  `C:\kilo\GHMetalRecomp\docs\menu-music.md`; a fork with FMOD mixing on the audio thread would use 0 instead.
 - The game plays on the **Windows default playback device** (SDL's console role). If that is a virtual device, for
   example "Speakers (Steam Streaming Microphone)" while Steam Remote Play is installed, the sound is crackly or
   muted. Set the real output (the monitor or speakers) as the default device, or check the endpoint the log names:
@@ -144,15 +149,29 @@ wrong defaults.
   art; `res/launcher.rc` its resources; `res/version.h` both executables' version.
 - `res/icon.ico` is used by both executables when present.
 
+## NativeXRenderer
+
+The game can be drawn by NativeXRenderer instead of the SDK's Xenos emulation (`--native_x_renderer=true`, or the
+launcher's Graphics page). The hooks and the XDK 2.0.7645 device layout are in
+`src/native_x_renderer_ghworldtour.cpp`; the library is the `native_x_renderer/` submodule (DiligentCore and its
+third-party submodules come with it). The mapping, the offsets, the scene resolve address and the verification steps
+are in [`native-x-renderer.md`](native-x-renderer.md).
+
+The renderer is the default (`kNativeXRendererDefault = true` in `launcher/game.h`); the Xenos path is the
+fallback, and `--native_x_renderer=false` (or the launcher's renderer row) switches back to it. The trace and
+observer run on the Xenos path: `--native_x_renderer_trace=true --native_x_renderer_observer=true` (F9 dumps a
+frame).
+
 ## Checking a change
 
 | Command | What it does |
 |---|---|
-| `tools/check.ps1` | clang-format on hand-written sources, launcher patch applied, whitespace, free disk. |
+| `tools/check.ps1` | clang-format on hand-written sources, launcher patch applied, whitespace, `tools/*.ps1` parse, the paths the docs name exist, free disk. |
 | `tools/check.ps1 -Build` | the above, then builds twice and fails if the second build re-runs the codegen. |
 | `tools/install-hooks.ps1` | installs the fast checks as the pre-commit hook (needs a git repository). |
 | `tools/scenario.ps1 -Scenario boot` | launches the game, waits for the title, reports a FATAL address. |
 | `tools/scenario.ps1 -Scenario quickplay` / `song` | drives the menus with SendInput and captures screenshots. |
+| `tools/scenario.ps1 -NativeXRenderer -Scaling fsr` | the same with NativeXRenderer and an upscaling filter; see its header for the options. |
 | `python tools/where.py 0x82241060` | which function an address belongs to, with body and neighbours. |
 | `python tools/find_equivalent.py ...` | ranks functions by body similarity to a reference recomp (porting a hook). |
 

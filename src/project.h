@@ -13,7 +13,7 @@
 #define GAME_OPTIONS "ghworldtour_options.toml"
 
 // The features this recomp does not have (the launcher hides their rows).
-#define GAME_HAS_NATIVE_X_RENDERER false
+#define GAME_HAS_NATIVE_X_RENDERER true
 #define GAME_FRAME_RATE_CVAR ""
 #define GAME_ULTRAWIDE_CVAR ""
 

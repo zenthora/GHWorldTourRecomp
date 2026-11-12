@@ -1,0 +1,13 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    # A unified diff ends a hunk with a context line holding a single space, which these hooks would
+    # strip (corrupting the patch): patches are left as they are.
+    { id = "trailing-whitespace", exclude = '^patches/.*\.patch$' },
+    { id = "end-of-file-fixer", exclude = '^patches/.*\.patch$' },
+    { id = "check-added-large-files" },
+]

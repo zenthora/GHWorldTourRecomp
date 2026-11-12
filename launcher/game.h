@@ -63,8 +63,16 @@ inline constexpr const char* kReleasesPage = "";
 // --- The game's own options (empty: the game has no such option, and the launcher no row) ---
 
 inline constexpr bool kHasNativeXRenderer = GAME_HAS_NATIVE_X_RENDERER;
-inline constexpr bool kNativeXRendererDefault = false;
-inline constexpr bool kHasDlaa = false;
+inline constexpr bool kNativeXRendererDefault = true;
+// The upscaling row's AMD FSR 3.1 and NVIDIA DLSS (NativeXRenderer's D47-D49, D116: the main 3D
+// view rebuilt from several frames, up to DLAA), and the antialiasing row's DLAA. The game marks no
+// views: NativeXRenderer finds the main 3D view from its draws (the first depth-writing draw of
+// 1280x720 with a perspective matrix, D118-D119) and ends it at the resolve that copies that view's
+// depth for the depth of field (0x824AE0D0, D138); the glow passes, the composite, the HUD and the
+// note highway are drawn after it, outside the view. There is no output-sized color copy to
+// antialias, so SMAA and FXAA keep acting on that depth copy (offered only when the upscaler is
+// off).
+inline constexpr bool kHasDlaa = true;
 inline constexpr bool kShadowQuality = false;
 inline constexpr const char* kFrameRateCvar = GAME_FRAME_RATE_CVAR;
 inline constexpr bool kFrameRateIsBool = false;

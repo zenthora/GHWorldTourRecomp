@@ -40,7 +40,7 @@ index d47cccc..bfcdec4 100644
 +  o.gamepad_tap = *game::kKeyboardTapTarget &&
 +                  (c.find("gamepad_tap_target") != c.end() ? !GetString(c, "gamepad_tap_target").empty()
 +                                                           : game::kGamepadTapDefault);
- 
+
    o.gamepad_remap = GetString(c, "gamepad_remap");
    o.device_remap = GetEscapedString(c, "gamepad_device_remap");
 diff --git a/settings.h b/settings.h
@@ -56,7 +56,7 @@ index da18c31..beb91e7 100644
    bool native = game::kHasNativeXRenderer && game::kNativeXRendererDefault;  // native_x_renderer: NativeXRenderer draws
    // native_x_renderer_antialiasing without a temporal upscaler: a NativeAntialiasing.
    int native_aa = kSmaa;
-@@ -160,9 +160,9 @@ struct Options {
+@@ -160,8 +160,8 @@ struct Options {
    bool mnk = false;
    bool mnk_mouse = false;
    // The keyboard's frets strum as they are pressed (game::kKeyboardTapTarget: the SDK's mnk_tap_target).
@@ -67,4 +67,3 @@ index da18c31..beb91e7 100644
 +  bool gamepad_tap = game::kGamepadTapDefault;  // Local change: a game's own default (game.h)
    float mnk_sensitivity = 1.0f;
    std::array<std::string, int(Bind::kCount)> binds;
- 

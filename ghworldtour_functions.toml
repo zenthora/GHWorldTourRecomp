@@ -35,4 +35,3 @@
 [[midasm_hook]]
 address = 0x82131658   # mflr r12 (sub_82131658)
 name = "GHWorldTourSongFrameHook"
-
