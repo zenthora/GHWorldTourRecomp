@@ -96,6 +96,16 @@ class GhworldtourApp : public rex::ReXApp {
     if (rex::cvar::GetFlagSource("gamepad_tap_target") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("gamepad_tap_target", "dpad_down");
     }
+    // Second and subsequent controllers have no profile of their own. Cancel the system sign-in
+    // UI cleanly instead of firing XN_SYS_SIGNINCHANGED/XN_SYS_UI with slot 1 still unsigned in
+    // (which left GHWT waiting on an empty backdrop when slot 1 pressed a button past the
+    // intros), and sign extra controllers in as local guests of the active profile.
+    if (rex::cvar::GetFlagSource("signin_ui_cancel") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("signin_ui_cancel", "true");
+    }
+    if (rex::cvar::GetFlagSource("signin_guests") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("signin_guests", "true");
+    }
   }
 
   // Game files: assets/ next to the executable or the repository's assets/. User data: userdata/

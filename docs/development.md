@@ -83,6 +83,11 @@ rexglue codegen ghworldtour_manifest.toml
 - GHWT refuses a plain gamepad in its guitar modes. The app reports every plain controller (and the keyboard's pad)
   as a guitar (`gamepad_subtype = 6`) and rests its whammy bar (`gamepad_whammy_rest = true`), unless the command line
   or the launcher's options say otherwise. A drum kit is `--gamepad_subtype=8`.
+- When multiple controllers are connected, the app defaults `signin_ui_cancel = true` and `signin_guests = true`
+  (`src/ghworldtour_app.h`), while still allowing `ghworldtour.toml`, `ghworldtour_options.toml`, or command-line
+  overrides (`--signin_ui_cancel=false`, `--signin_guests=false`): without `signin_ui_cancel`, pressing a button on
+  an unsigned-in second controller at the post-intro title screen leaves the game waiting on an empty menu backdrop;
+  with `signin_guests`, extra controllers join as local guests of the active profile.
 
 ## Audio
 
