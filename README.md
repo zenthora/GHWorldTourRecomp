@@ -76,7 +76,7 @@ and the song-frame hook `0x82131658`.
 | `src/` | The app (`main.cpp`, `ghworldtour_app.h`), startup/profile glue (`startup.cpp/h`) and shared names (`project.h`). |
 | `launcher/` | This game's launcher profile: `game.h`, `game.cpp` (texts), `palette.h`, `art/background.svg`. |
 | `recomp_launcher/` | RecompLauncher's code (the launcher itself); keep it clean. |
-| `patches/` | The tracked patch that adds this game's launcher defaults (applied by CMake). |
+| `patches/` | Tracked patches applied by CMake to the SDK, NativeXRenderer, and RecompLauncher. |
 | `tools/` | Scenario runner, address lookup, body-similarity search, `check.ps1`, `menu-map.md`. |
 | `res/` | Windows resources: version information and the icon (`icon.ico`). |
 | `cmake/` | The build's codegen-stamp fix. |
@@ -88,6 +88,8 @@ See [`docs/development.md`](docs/development.md) for the build details.
 
 ## Credits
 
+- [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp) by Gustavo Garcia ([ElGuslml](https://github.com/ElGuslml)), from which this project's layout, build glue, and tooling were adapted.
+- [NativeXRenderer](https://github.com/ElGuslml/NativeXRenderer), the native Direct3D 12 / Vulkan renderer.
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) and its
   [recomp fork](https://github.com/ElGuslml/rexglue-sdk), whose runtime is derived from [Xenia](https://xenia.jp).
 - [RecompLauncher](https://github.com/ElGuslml/RecompLauncher), the launcher's code.
@@ -95,4 +97,4 @@ See [`docs/development.md`](docs/development.md) for the build details.
 
 ## License
 
-MIT for this project's own code. Guitar Hero: World Tour, its code and its assets belong to their respective owners.
+MIT for this project's own code (see [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)). Guitar Hero: World Tour, its code and its assets belong to their respective owners.

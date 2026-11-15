@@ -2,6 +2,9 @@
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
 
+default_install_hook_types = ["pre-commit", "commit-msg"]
+default_stages = ["pre-commit"]
+
 [[repos]]
 repo = "builtin"
 hooks = [
@@ -10,4 +13,45 @@ hooks = [
     { id = "trailing-whitespace", exclude = '^patches/.*\.patch$' },
     { id = "end-of-file-fixer", exclude = '^patches/.*\.patch$' },
     { id = "check-added-large-files" },
+    { id = "check-merge-conflict" },
+    { id = "detect-private-key" },
+    { id = "check-toml" },
+    { id = "check-json" },
 ]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "check-guardrails"
+name = "check guardrails (tools/check.ps1)"
+language = "system"
+entry = "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1"
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "conventional-commit"
+name = "conventional commit"
+language = "system"
+stages = ["commit-msg"]
+pass_filenames = true
+entry = 'python -c "import pathlib,re,sys; s=next((l.strip() for l in pathlib.Path(sys.argv[1]).read_text(encoding=\"utf-8\",errors=\"replace\").splitlines() if l.strip() and not l.startswith(\"#\")),\"\"); ok=bool(re.match(r\"^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\([a-zA-Z0-9_./-]+\\))?!?: .+\",s) or re.match(r\"^(Merge|Revert|fixup!|squash!) \",s)); sys.exit(0 if ok else (print(\"Invalid commit message. Use Conventional Commits: <type>[optional scope]: <description>\",file=sys.stderr) or 1))"'
+
+[[repos.hooks]]
+id = "git-cliff"
+name = "generate changelog with git-cliff"
+language = "system"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+entry = "git-cliff -o CHANGELOG.md"
+
+[[repos.hooks]]
+id = "check-build"
+name = "double-build codegen stamp check (tools/check.ps1 -Build)"
+language = "system"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+entry = "powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1 -Build"

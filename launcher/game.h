@@ -76,7 +76,8 @@ inline constexpr bool kHasDlaa = true;
 inline constexpr bool kShadowQuality = false;
 inline constexpr const char* kFrameRateCvar = GAME_FRAME_RATE_CVAR;
 inline constexpr bool kFrameRateIsBool = false;
-inline constexpr std::array<FrameRate, 0> kFrameRates{};
+inline constexpr std::array<FrameRate, 6> kFrameRates{
+    {{60, 60}, {120, 120}, {144, 144}, {160, 160}, {165, 165}, {240, 240}}};
 inline constexpr int kFrameRateDefault = 60;
 inline constexpr const char* kNoMsaaCvar = "";
 inline constexpr const char* kMsaaLabel = "";
@@ -97,7 +98,7 @@ inline constexpr std::array<Toggle, 0> kToggles{{}};
 // --- Downloadable content and pipelines ---
 
 inline constexpr bool kHasDlcPage = false;
-inline constexpr bool kHasPipelineList = false;
+inline constexpr bool kHasPipelineList = true;
 
 // --- The keyboard ---
 
@@ -125,7 +126,7 @@ inline constexpr std::array<KeyDefault, 19> kKeyboardDefaults{{
 }};
 // The launcher's switch that makes the frets (and a controller's) strum as they are pressed: the
 // control it presses when on, the D-pad (strumming). "": no switch. The game allows the strum only
-// in a song (src/keyboard.cpp), so menus keep their D-pad.
+// in a song (src/input_gates.cpp), so menus keep their D-pad.
 inline constexpr const char* kKeyboardTapTarget = "dpad_down";
 // A fresh install has it on: GHWT has no auto-strum (Beginner still asks for a strum), and playing
 // with a controller or the keyboard otherwise means strumming and fretting at once.

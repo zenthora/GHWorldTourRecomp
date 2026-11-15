@@ -50,6 +50,33 @@ if(WIN32)
 endif()
 set(REXGLUE_USE_VULKAN ON CACHE BOOL "Enable the Vulkan graphics backend")
 
+# Apply tracked GHWorldTourRecomp patches to upstream checkouts (the SDK, NativeXRenderer, and
+# RecompLauncher stay on upstream commits; CMake applies each patch once when configuring).
+function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
+    if(EXISTS "${PATCH_FILE}" AND EXISTS "${REPO_DIR}/.git")
+        execute_process(
+            COMMAND git -C "${REPO_DIR}" apply --reverse --check "${PATCH_FILE}"
+            RESULT_VARIABLE GHWT_PATCH_APPLIED OUTPUT_QUIET ERROR_QUIET)
+        if(NOT GHWT_PATCH_APPLIED EQUAL 0)
+            execute_process(
+                COMMAND git -C "${REPO_DIR}" apply "${PATCH_FILE}"
+                RESULT_VARIABLE GHWT_PATCH_RESULT
+                OUTPUT_VARIABLE GHWT_PATCH_OUTPUT ERROR_VARIABLE GHWT_PATCH_ERROR)
+            if(NOT GHWT_PATCH_RESULT EQUAL 0)
+                message(FATAL_ERROR
+                    "Could not apply ${PATCH_FILE} to ${REPO_DIR}:\n${GHWT_PATCH_ERROR}")
+            endif()
+            message(STATUS "Applied the GHWT ${LABEL} patch to ${REPO_DIR}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PATCH_FILE}")
+    endif()
+endfunction()
+
+ghwt_apply_git_patch(
+    "${REXSDK_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/rexglue-sdk-set-remap-gate.patch"
+    "SDK SetRemapGate")
+
 include(generated/rexglue.cmake)
 
 # The codegen stamps the manifest's sdk_version after writing codegen.build.stamp, which leaves the
@@ -98,7 +125,11 @@ set(GHWORLDTOUR_SOURCES
     src/main.cpp
     src/native_x_renderer_ghworldtour.cpp
     src/startup.cpp
-    src/keyboard.cpp
+    src/input_gates.cpp
+    src/thread_waits.cpp
+    src/framerate.cpp
+    src/timer.cpp
+    src/fmod_mix.cpp
 )
 
 if(WIN32)
@@ -113,6 +144,10 @@ add_dependencies(ghworldtour ghworldtour_sources_marker ghworldtour_codegen_stam
 # NativeXRenderer: the native renderer (native_x_renderer/README.md). The game side (hooks and profile)
 # is src/native_x_renderer_ghworldtour.cpp; the game draws on the Xenos path while native_x_renderer is
 # off. The library builds the SDK's graphics sources for the SPIR-V translator in process.
+ghwt_apply_git_patch(
+    "${CMAKE_CURRENT_SOURCE_DIR}/native_x_renderer"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/native_x_renderer-dlssg-and-depth-upscale.patch"
+    "NativeXRenderer")
 add_subdirectory(native_x_renderer)
 target_link_libraries(ghworldtour PRIVATE native_x_renderer)
 # AMD FidelityFX's Vulkan runtime next to the executable (DLSS comes from the SDK's copy_dlss_dlls).
@@ -173,25 +208,10 @@ else()
     # kVsyncDefault / kKeyboardTapDefault / kGamepadTapDefault constants in launcher/game.h) come from a
     # tracked patch, applied here once. A changed upstream that the patch no longer fits fails loudly
     # instead of silently building the wrong defaults.
-    set(GHWT_LAUNCHER_PATCH
-        "${CMAKE_CURRENT_SOURCE_DIR}/patches/recomp_launcher-3.14.0-game-defaults.patch")
-    if(EXISTS "${GHWT_LAUNCHER_PATCH}" AND EXISTS "${RECOMP_LAUNCHER_DIR}/.git")
-        execute_process(
-            COMMAND git -C "${RECOMP_LAUNCHER_DIR}" apply --reverse --check "${GHWT_LAUNCHER_PATCH}"
-            RESULT_VARIABLE GHWT_PATCH_APPLIED OUTPUT_QUIET ERROR_QUIET)
-        if(NOT GHWT_PATCH_APPLIED EQUAL 0)
-            execute_process(
-                COMMAND git -C "${RECOMP_LAUNCHER_DIR}" apply "${GHWT_LAUNCHER_PATCH}"
-                RESULT_VARIABLE GHWT_PATCH_RESULT
-                OUTPUT_VARIABLE GHWT_PATCH_OUTPUT ERROR_VARIABLE GHWT_PATCH_ERROR)
-            if(NOT GHWT_PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR
-                    "Could not apply ${GHWT_LAUNCHER_PATCH} to recomp_launcher:\n${GHWT_PATCH_ERROR}")
-            endif()
-            message(STATUS "Applied the GHWT game-defaults patch to recomp_launcher")
-        endif()
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GHWT_LAUNCHER_PATCH}")
-    endif()
+    ghwt_apply_git_patch(
+        "${RECOMP_LAUNCHER_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/patches/recomp_launcher-3.14.0-game-defaults.patch"
+        "game-defaults")
 
     include("${RECOMP_LAUNCHER_DIR}/RecompLauncher.cmake")
     recomp_launcher_add(ghworldtour_launcher

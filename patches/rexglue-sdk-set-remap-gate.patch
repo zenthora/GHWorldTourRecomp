@@ -1,0 +1,138 @@
+diff --git a/RECOMP.md b/RECOMP.md
+index 7453ffa..cede22d 100644
+--- a/RECOMP.md
++++ b/RECOMP.md
+@@ -94,6 +94,7 @@ None of them is specific to one game; the options they add are off by default.
+ | 72 | `gamepad_tilt_calibration` (empty by default): a launcher's calibration of a controller's tilt, `controller=source:rest:full` entries (a controller named as in `gamepad_device_remap`; source `lx ly rx ry lt rt`, or `ax ay az` for its accelerometer, in thousandths of m/s2, started when the controller connects): the right stick's Y, where a guitar's tilt is, becomes that source, from 0 at rest to 32767 a fifth short of the position held. Guitar Hero: Metallica's `star_tilt_threshold` is -1.0 of the axis, so Star Power takes the stick at its very end (98 %, 32256): an Xbox 360 guitar's accelerometer saturates well before that, but a Wii guitar through WiitarThing, whose scale ends with the neck straight up, or anything else with a scale of its own, rarely got there. The accelerometer is the only tilt on the PS3 Guitar Hero protocol (SDL gives it as a sensor). Checked with SDL's virtual controllers, not yet with those guitars |
+ | 75 | `critical_section_spin_us` (0 by default): a thread entering a guest critical section another thread holds watches it for up to that many microseconds (the pause instruction between reads, the clock every 16) and takes it as soon as it is free, before it counts itself a waiter and sleeps on the kernel; the guest's own spin count still comes first. A waiter is handed the lock at its release and owns it while it wakes (~5 us), so a lock the game created with no spin count and takes by turns put every thread to sleep and woke it again: Guitar Hero: Metallica's job queue lock, its main thread and three job workers, ~78,000 sleeps a second in a song (a WPR trace; every thread on a performance core and running within 5 us of being woken, so no affinity or priority would help). With 20, switched every 6 s in one song: the process's context switches 92,000 -> 31,300 a second, 1.84 -> 1.66 cores; 5 and 50 gave the same switches |
+ | 76 | `sync_only_lean` (true by default): with host rendering off (a renderer of its own draws and the command processor runs the packets for synchronization only, `SetHostRendering(false)`), an `IM_LOAD` keeps the microcode's address instead of loading the shader (hashing it, the backend's shader map), and loads it only when a draw observer asks for the active shaders; a swap (`XE_SWAP`) skips `IssueSwap` (the presenter's guest output refresh: the frontbuffer from the texture cache and a copy, and the host submission it ends), keeping its count, observer and pacing. In Kameo with NativeXRenderer the two were about a fifth of the command processor thread's time (a WPR trace: LoadShader 12.6 %, IssueSwap 10 % plus the driver). Off: `sync_only_lean = false`. |
++| 77 | `SetRemapGate` (`rex::input::SetRemapGate`): `gamepad_remap` and `gamepad_device_remap` apply only while the game's gate returns true; null, the default: always, as before. Outside the gate a controller plays the standard layout, and its controls follow the gate's change at its next read, even if it sends nothing then. A game whose launcher gives it a guitar's layout wanted that layout only in a song: applied everywhere, the layout also put confirm and cancel on the triggers in the menus (Guitar Hero World Tour, its guitar layout on LT, LB, RB, RT and A: its menus wanted LT to confirm and LB to go back, not A and B). Guitar Hero III's standard controller plays the guitar's frets on the triggers with the orange fret on A in a song, and has A confirm and B go back in its menus; Guitar Hero World Tour sets the gate to do the same |
+ 
+ ## For NativeXRenderer
+ 
+diff --git a/include/rex/input/input.h b/include/rex/input/input.h
+index 96520b8..55b8bcd 100644
+--- a/include/rex/input/input.h
++++ b/include/rex/input/input.h
+@@ -129,4 +129,10 @@ struct X_INPUT_KEYSTROKE {
+ };
+ static_assert_size(X_INPUT_KEYSTROKE, 8);
+ 
++/// gamepad_remap and gamepad_device_remap apply only while `gate` returns true, a state of the game's own; null, the
++/// default: always. Outside the gate a controller plays the standard layout (Guitar Hero World Tour keeps its guitar
++/// layout for a song: its menus take their controls from the standard one, as Guitar Hero III's do). The gate runs on
++/// the thread that reads the pad, at each read.
++void SetRemapGate(bool (*gate)());
++
+ }  // namespace rex::input
+diff --git a/include/rex/input/sdl/sdl_input_driver.h b/include/rex/input/sdl/sdl_input_driver.h
+index a34ebb5..2d6ab64 100644
+--- a/include/rex/input/sdl/sdl_input_driver.h
++++ b/include/rex/input/sdl/sdl_input_driver.h
+@@ -90,6 +90,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener
+     // For each remappable control, the physical inputs that press it (SDL_GamepadButton bits; bits 32 and 33
+     // are the left and right triggers).
+     std::array<uint64_t, kRemapControls> sources;
++    // Whether the game's remap gate (SetRemapGate) was open at this controller's last read: the layout the guest
++    // sees is recomputed when it changes, even if the controller sends nothing.
++    bool remap_gate_open = true;
+     // A guitar whose whammy bar (the right stick's X axis, -32768 at rest) has not reported a position yet: an Xbox
+     // 360 guitar reads 0 there, half pressed, until the bar first moves. Until then the bar is at rest (with
+     // guitar_whammy_rest).
+diff --git a/src/input/sdl/sdl_input_driver.cpp b/src/input/sdl/sdl_input_driver.cpp
+index 5e3c092..9c67d00 100644
+--- a/src/input/sdl/sdl_input_driver.cpp
++++ b/src/input/sdl/sdl_input_driver.cpp
+@@ -65,6 +65,26 @@ REXCVAR_DEFINE_BOOL(
+     "guitar: yellow and blue, swapped on that protocol, put right, and its whammy bar at rest at the middle of its "
+     "axis. A launcher's calibration of the bar still wins. For a game that plays guitars");
+ 
++namespace rex::input {
++
++namespace {
++
++// The game's gate of gamepad_remap (SetRemapGate): the layout applies only while it returns true.
++std::atomic<bool (*)()> g_remap_gate{nullptr};
++
++bool RemapGateOpen() {
++  bool (*gate)() = g_remap_gate.load(std::memory_order_acquire);
++  return !gate || gate();
++}
++
++}  // namespace
++
++void SetRemapGate(bool (*gate)()) {
++  g_remap_gate.store(gate, std::memory_order_release);
++}
++
++}  // namespace rex::input
++
+ namespace rex::input::sdl {
+ 
+ namespace {
+@@ -691,6 +711,15 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
+ 
++  // gamepad_remap may be for a state of the game's own (SetRemapGate): when the gate changes, the guest's controls
++  // follow at this read even if the controller sent nothing since.
++  bool remap_gate_open = RemapGateOpen();
++  if (remap_gate_open != controller->remap_gate_open) {
++    controller->remap_gate_open = remap_gate_open;
++    ApplyRemap(*controller);
++    controller->state_changed = true;
++  }
++
+   // Make sure packet_number is only incremented by 1, even if there have been
+   // multiple updates between GetState calls. Also track `is_active` to
+   // increment the packet number if it changed.
+@@ -1162,17 +1191,21 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
+ 
+ void SDLInputDriver::ApplyRemap(ControllerState& state) {
+   static_assert(SDL_GAMEPAD_BUTTON_COUNT <= kInputLeftTrigger);
+-  auto pressed = [&state](uint64_t sources) {
+-    return (sources & state.physical_buttons) != 0 ||
+-           ((sources & Bit(kInputLeftTrigger)) && state.physical_triggers[0] > HID_SDL_TRIGG_THRES) ||
+-           ((sources & Bit(kInputRightTrigger)) && state.physical_triggers[1] > HID_SDL_TRIGG_THRES);
++  // gamepad_remap applies only while the game's gate allows it (SetRemapGate): outside it the controller plays the
++  // standard layout (Guitar Hero World Tour: the guitar layout in a song, the standard one in its menus).
++  const std::array<uint64_t, kRemapControls>& sources =
++      RemapGateOpen() ? state.sources : kDefaultSources;
++  auto pressed = [&state](uint64_t mask) {
++    return (mask & state.physical_buttons) != 0 ||
++           ((mask & Bit(kInputLeftTrigger)) && state.physical_triggers[0] > HID_SDL_TRIGG_THRES) ||
++           ((mask & Bit(kInputRightTrigger)) && state.physical_triggers[1] > HID_SDL_TRIGG_THRES);
+   };
+   // An analog trigger keeps its travel; a button on a trigger pulls it all the way.
+-  auto trigger = [&state](uint64_t sources) {
++  auto trigger = [&state](uint64_t mask) {
+     uint8_t value = 0;
+-    if (sources & Bit(kInputLeftTrigger)) value = std::max(value, state.physical_triggers[0]);
+-    if (sources & Bit(kInputRightTrigger)) value = std::max(value, state.physical_triggers[1]);
+-    if (sources & state.physical_buttons) value = 0xFF;
++    if (mask & Bit(kInputLeftTrigger)) value = std::max(value, state.physical_triggers[0]);
++    if (mask & Bit(kInputRightTrigger)) value = std::max(value, state.physical_triggers[1]);
++    if (mask & state.physical_buttons) value = 0xFF;
+     return value;
+   };
+ 
+@@ -1188,7 +1221,7 @@ void SDLInputDriver::ApplyRemap(ControllerState& state) {
+     }
+   }
+   for (int c = 0; c < kRemapControls; ++c) {
+-    if (kControlButtons[c] && pressed(state.sources[c])) {
++    if (kControlButtons[c] && pressed(sources[c])) {
+       buttons |= kControlButtons[c];
+     }
+   }
+@@ -1196,8 +1229,8 @@ void SDLInputDriver::ApplyRemap(ControllerState& state) {
+     buttons &= ~uint16_t(X_INPUT_GAMEPAD_GUIDE);
+   }
+   state.state.gamepad.buttons = buttons;
+-  state.state.gamepad.left_trigger = trigger(state.sources[kLT]);
+-  state.state.gamepad.right_trigger = trigger(state.sources[kRT]);
++  state.state.gamepad.left_trigger = trigger(sources[kLT]);
++  state.state.gamepad.right_trigger = trigger(sources[kRT]);
+ }
+ 
+ std::optional<size_t> SDLInputDriver::GetControllerIndexFromInstanceID(SDL_JoystickID instance_id) {

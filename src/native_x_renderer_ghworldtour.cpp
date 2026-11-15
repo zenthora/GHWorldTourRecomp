@@ -19,10 +19,77 @@
 
 #include "native_x_renderer_ghworldtour.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 #include <native_x_renderer/hooks.h>
 
 namespace ghworldtour {
 namespace {
+
+// Runtime-patched vertex shader XXH3 hashes from 4156081A.pipelines (GHWT XDK compilation of
+// Highway_UI_Default.updb and ImmediateMode_AlphaFade_UI_Default.updb).
+constexpr uint64_t kBoardShader = 0x4d61655977a48b60ull;
+constexpr uint64_t kBeatLineShader = 0x3f3bf50f2d798c23ull;
+
+void AdjustHighwayMotion(native_x_renderer::OverlayDraw* draws, size_t count) {
+  struct Line {
+    float y, y_last, left, right;
+  };
+  static std::vector<Line> lines;
+  lines.clear();
+  for (size_t d = 0; d < count; ++d) {
+    const native_x_renderer::OverlayDraw& draw = draws[d];
+    if (draw.vertex_shader != kBeatLineShader || !draw.matched || draw.vertex_count != 4) {
+      continue;
+    }
+    Line line{0.0f, 0.0f, draw.positions[0], draw.positions[0]};
+    for (uint32_t i = 0; i < 4; ++i) {
+      line.y += draw.positions[2 * i + 1] * 0.25f;
+      line.y_last += draw.previous[2 * i + 1] * 0.25f;
+      line.left = std::min(line.left, draw.positions[2 * i]);
+      line.right = std::max(line.right, draw.positions[2 * i]);
+    }
+    // A line comes down the screen; one matched with another (a new line at the top) is left out.
+    if (line.y_last < line.y && line.right - line.left > 1.0f) {
+      lines.push_back(line);
+    }
+  }
+  if (lines.size() < 2) {
+    return;
+  }
+  std::sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.y < b.y; });
+  // Interpolate between the surrounding beat lines, or extrapolate from the nearest two past ends.
+  auto at = [&](float y, float Line::* field) {
+    size_t i = 1;
+    while (i + 1 < lines.size() && lines[i].y < y) {
+      ++i;
+    }
+    const Line& a = lines[i - 1];
+    const Line& b = lines[i];
+    float t = b.y != a.y ? (y - a.y) / (b.y - a.y) : 0.0f;
+    return a.*field + t * (b.*field - a.*field);
+  };
+  for (size_t d = 0; d < count; ++d) {
+    native_x_renderer::OverlayDraw& draw = draws[d];
+    if (draw.vertex_shader != kBoardShader) {
+      continue;
+    }
+    for (uint32_t i = 0; i < draw.vertex_count; ++i) {
+      float x = draw.positions[2 * i];
+      float y = draw.positions[2 * i + 1];
+      float y_last = at(y, &Line::y_last);
+      float left = at(y, &Line::left);
+      float right = at(y, &Line::right);
+      float across = right - left > 1.0f ? (x - left) / (right - left) : 0.5f;
+      float left_last = at(y_last, &Line::left);
+      float right_last = at(y_last, &Line::right);
+      draw.previous[2 * i] = left_last + across * (right_last - left_last);
+      draw.previous[2 * i + 1] = y_last;
+    }
+  }
+}
 
 using native_x_renderer::Profile;
 
@@ -48,6 +115,8 @@ Profile MakeProfile() {
   p.upscale_resolve_caller = 0x824AE0D0;
   p.upscale_resolve_depth = true;
   p.unscaled_screen_fractions = true;
+  p.overlay_motion = true;
+  p.overlay_motion_adjust = AdjustHighwayMotion;
 
   p.title_id = 0x4156081A;
   p.shader_files = kShaderFiles;

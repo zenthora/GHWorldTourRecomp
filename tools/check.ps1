@@ -17,7 +17,7 @@ $failures = New-Object System.Collections.Generic.List[string]
 function Pass([string]$message) { Write-Host "ok   $message" -ForegroundColor Green }
 function Fail([string]$message) { $script:failures.Add($message); Write-Host "FAIL $message" -ForegroundColor Red }
 
-# 1. The launcher patch: recomp_launcher must have exactly this game's defaults applied.
+# 1. Tracked patches: recomp_launcher and rexglue-sdk-recomp must have GHWorldTourRecomp's patches applied.
 $patch = Join-Path $root "patches\recomp_launcher-3.14.0-game-defaults.patch"
 $launcher = Join-Path $root "recomp_launcher"
 if (-not (Test-Path -LiteralPath $patch)) {
@@ -30,6 +30,19 @@ if (-not (Test-Path -LiteralPath $patch)) {
         Pass "recomp_launcher has the game-defaults patch"
     } else {
         Fail "recomp_launcher is missing the game-defaults patch; run cmake --preset win-amd64-release"
+    }
+}
+
+$sdkPatch = Join-Path $root "patches\rexglue-sdk-set-remap-gate.patch"
+$sdkDir = Join-Path $root "..\rexglue-sdk-recomp"
+if (-not (Test-Path -LiteralPath $sdkPatch)) {
+    Fail "missing $sdkPatch"
+} elseif (Test-Path -LiteralPath (Join-Path $sdkDir ".git")) {
+    & git -C $sdkDir apply --reverse --check $sdkPatch 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Pass "rexglue-sdk-recomp has the SetRemapGate patch"
+    } else {
+        Fail "rexglue-sdk-recomp is missing patches/rexglue-sdk-set-remap-gate.patch; run cmake --preset win-amd64-release"
     }
 }
 
@@ -67,12 +80,14 @@ if (Test-Path -LiteralPath (Join-Path $root ".git")) {
     Pass "no git repository yet (skipping the whitespace check)"
 }
 
-# 3b. The NativeXRenderer submodule's changes are committed there. This repository records only its
-# commit: an edit left uncommitted in native_x_renderer/ is in neither this repository's diff nor a
-# reviewer's, and the pre-commit hook would let the parent commit through without it. Commit the
-# submodule first; the parent then records the new commit.
+# 3b. The NativeXRenderer submodule stays on its upstream commit and carries only the tracked patch in
+# patches/native_x_renderer-dlssg-and-depth-upscale.patch: unexported edits or untracked files in
+# native_x_renderer/ would be invisible in this repository's diff, so fail if they exist.
+$nxrPatch = Join-Path $root "patches\native_x_renderer-dlssg-and-depth-upscale.patch"
 $submodule = Join-Path $root "native_x_renderer"
-if (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
+if (-not (Test-Path -LiteralPath $nxrPatch)) {
+    Fail "missing $nxrPatch"
+} elseif (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
     # A pre-commit hook inherits git's index and object environment (GIT_INDEX_FILE, GIT_DIR), which
     # would make git -C read this repository's index as the submodule's: every submodule file would
     # look deleted. Ask the submodule for its own repository instead.
@@ -83,7 +98,19 @@ if (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
         Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
     }
     try {
-        $dirty = & git -C $submodule status --porcelain -- . ':(exclude)thirdparty' 2>$null
+        & git -C $submodule apply --reverse --check $nxrPatch 2>$null
+        $patchOk = ($LASTEXITCODE -eq 0)
+
+        $ahead = @()
+        & git -C $submodule rev-parse --verify origin/main 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $ahead = @(& git -C $submodule rev-list origin/main..HEAD 2>$null)
+        }
+
+        $untracked = @(& git -C $submodule ls-files --others --exclude-standard -- . ':(exclude)thirdparty' 2>$null)
+        $diffLines = @(& git -C $submodule diff -- . ':(exclude)thirdparty' 2>$null)
+        $diffOk = ($LASTEXITCODE -eq 0)
+        $patchLines = @(Get-Content -LiteralPath $nxrPatch)
     } finally {
         foreach ($name in $saved_git_env.Keys) {
             if ($null -ne $saved_git_env[$name]) {
@@ -91,13 +118,18 @@ if (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
             }
         }
     }
-    if ($LASTEXITCODE -ne 0) {
-        Fail "git status failed in native_x_renderer"
-    } elseif ($dirty) {
-        Fail ("native_x_renderer has uncommitted changes (commit them there; this repository's diff does not show " +
-              "them): " + (($dirty | Select-Object -First 5) -join '; '))
+    if (-not $diffOk) {
+        Fail "git diff failed in native_x_renderer"
+    } elseif ($ahead.Count -gt 0) {
+        Fail "native_x_renderer has unpushed local commit(s) ahead of origin/main; export to patches/ and reset to upstream"
+    } elseif (-not $patchOk) {
+        Fail "native_x_renderer is missing patches/native_x_renderer-dlssg-and-depth-upscale.patch; run cmake --preset win-amd64-release"
+    } elseif ($untracked.Count -gt 0) {
+        Fail ("native_x_renderer has untracked file(s): " + (($untracked | Select-Object -First 5) -join '; '))
+    } elseif ($diffLines.Count -ne $patchLines.Count) {
+        Fail "native_x_renderer has edits beyond patches/native_x_renderer-dlssg-and-depth-upscale.patch (diff $($diffLines.Count) lines vs patch $($patchLines.Count) lines); update the patch"
     } else {
-        Pass "native_x_renderer's changes are committed"
+        Pass "native_x_renderer matches patches/native_x_renderer-dlssg-and-depth-upscale.patch"
     }
 }
 

@@ -5,3 +5,4 @@
 [submodule "native_x_renderer"]
 	path = native_x_renderer
 	url = https://github.com/ElGuslml/NativeXRenderer.git
+	ignore = dirty

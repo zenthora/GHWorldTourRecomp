@@ -167,8 +167,12 @@ the view: they keep their 1:1 pixels and are not reprojected. Verified at 1280x7
 a song (DLAA run `ghworldtour_058`): `DLAA applied 600 times in 600 frames`, camera vote `600 of 600 views
 voted` (188-189 of 195 offers), 294-658 draw calls a frame. FSR 3.1 takes the same boundary
 (`--native_x_renderer_antialiasing=fsr_native --native_x_renderer_upscaling=fsr3`). The DLSS *quality* modes
-(`dlss_quality|balanced|performance|ultra_performance`, the 3D view drawn at a reduced size, D121) use it too
-but were not measured; they are the library's experimental path (D53).
+(`dlss_quality|balanced|performance|ultra_performance`, the 3D view drawn at a reduced size, D121) use it too;
+boot-checked with DLSS Quality (`ghworldtour_090.log`): `antialiasing: DLSS Quality (experimental, D53): the 3D view
+drawn at 853x480 (scale 0.666x0.667), upscaled to 1280x720 by DLSS, with the motion of objects that move on their own;
+the main 3D view and the camera's motion found from the draws (D118, D119)` and `[frame rate] script waits in game
+frames last as at 60 FPS (vblank at 120 Hz)`. In-song evaluation of the upscaled 3D view at reduced resolution awaits
+an interactive desktop run of `tools/scenario.ps1 -Scenario song` (`CopyFromScreen` fails in non-interactive sessions).
 
 The log says which state a frame is in (D139), one line per change that persists half a second: `3D view: upscaled
 at the profile's point 0x824ae0d0` when the upscaler ran on the view, `3D view: found, but its upscale point … did
@@ -176,6 +180,39 @@ not run` when the view started and the boundary was rejected (the first rejected
 view: none` for menus and videos. `tools/scenario.ps1 -Scenario song` fails (exit 5) when a run never logs a view
 at all.
 
-Frame generation (`native_x_renderer_frame_generation`) is not wired for GHWT: the profile does not set
-`overlay_motion`, so the HUD-less picture route would be needed, and GHWT has no output-sized color copy to
-take it from. The launcher's frame generation row stays off (`kFrameGenerationRow`).
+### Pipeline lists and pre-compilation
+
+Pipeline storage and list tools are verified against `4156081A.pipelines`:
+- Stored pipelines on boot (`ghworldtour_087.log`): `pipeline storage .../4156081A.pipelines: 272 shaders, 306 translations and 345 pipelines from earlier runs; pipeline cache 15104 KB` and `the 345 stored pipelines created in 179 ms after the first draw (their compilation continues on DiligentCore's threads); 345 pipelines with the resource signature, 0 with their own layout (D131)`.
+- List generation (`--native_x_renderer_make_pipeline_list`, `ghworldtour_091.log`): `make_pipeline_list: ... 4156081A.pipelines.list from 1 storages: 272 of 272 shaders (122 pixel, 150 vertex of which 0 with their exports linked to a pixel shader; 0 not in the game's files, 0 of them vertex shaders patched beyond their vertex layout and exports), 306 translations and 345 pipelines (0 and 0 left out with their shaders)` (75,195 byte list file).
+- Pre-compilation (`--native_x_renderer_prepare_pipelines`, `ghworldtour_093.log`): `prepare_pipelines: list ...: 272 of 272 shaders rebuilt from the game's files (0 not found, 0 with another hash), 306 translations, 345 pipelines` -> `306 translations and 345 pipelines made in 2389 ms (0 failed) with 12 threads; pipeline cache 13522 KB` -> `linked from parts (D132): 247 parts made, 1133 reused, 345 pipelines linked, 0 made whole for want of parts; every whole pipeline compiled after 2792 ms`, progress `done 651 651`. The launcher enables pipeline compilation via `kHasPipelineList = true` in `launcher/game.h`.
+
+### Frame generation and the note highway
+
+Frame generation (`native_x_renderer_frame_generation`, NVIDIA DLSS-G or AMD FSR 3.1 through
+`native_x_renderer_frame_generation_provider=auto|nvidia|amd`) is wired: the profile sets `overlay_motion` and
+`overlay_motion_adjust = AdjustHighwayMotion` (`src/native_x_renderer_ghworldtour.cpp`). The highway is drawn
+after the 3D view's resolve, so its motion comes from its own vertices: the board is the 1600-vertex draw of
+`Highway_UI_Default` and the beat lines are the 4-vertex quads of `ImmediateMode_AlphaFade_UI_Default`.
+
+The hashes are the XXH3 of the vertex shaders as the XDK patches them at draw time, read from
+`userdata/cache/native_x_renderer/4156081A.pipelines`: board `0x4d61655977a48b60`, beat lines
+`0x3f3bf50f2d798c23`. They are not GH Metallica's (`0x2083ccdca7046959`, `0x73eff373b3e69dbd`): the same
+`.updb` microcode in GH Metallica's `MaterialLibrary.bin.xen`, with GHWT's vertex-fetch words patched in, hashes to
+GH Metallica's values (checked with a scratch tool on both libraries), which ties each pair together.
+
+The frame rate is `ghworldtour_frame_rate` (60, 120, 144, 160, 165, 240 in the launcher). With frame generation on and
+a temporal upscaler (DLAA, DLSS, FSR) the app halves it into `video_mode_refresh_rate` and logs `[options] frame
+generation: 120 FPS shown, the game at 60`; below 120 it turns frame generation off and says why.
+
+Verified without a desktop session (`ghworldtour_088.log`, `ghworldtour_089.log`, 25 s boot, DLAA,
+`--ghworldtour_frame_rate=120 --native_x_renderer_frame_generation=true`, providers `nvidia` and `auto`): the lines
+`[options] frame generation: 120 FPS shown, the game at 60`, `frame generation: NVIDIA DLSS-G (requested "nvidia"), a
+frame between each two of the game's, with V-Sync (D123, D142)` (`requested "auto"` in the second run, no AMD
+fallback) and `frame generation (D123): 0 frames generated, 1 game frames without one; the game's frames 16.70 ms apart`; no FATAL or `[error]`.
+
+Not verified: any in-song frame generation (`NGX_VK_CREATE_DLSSG`, `NGX_VK_EVALUATE_DLSSG`, the `provider=auto`
+fallback to AMD), the `3D view: upscaled at the profile's point 0x824ae0d0` line, DLSS Quality, 120 FPS pacing and
+whether `AdjustHighwayMotion` matches the highway draws. These need `tools/scenario.ps1 -Scenario song` from an
+interactive desktop (`CopyFromScreen` fails without one). The launcher's frame generation row stays off
+(`kFrameGenerationRow`, in the launcher submodule): the option is reached with `--native_x_renderer_frame_generation=true`.

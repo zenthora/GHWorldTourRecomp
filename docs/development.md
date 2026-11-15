@@ -34,7 +34,9 @@ On Windows, `git clone` leaves the libmspack symlinks (in `thirdparty/libmspack/
 the build fails on them, replace each stub with the file it names.
 
 The project builds the SDK from that source tree (`GHWORLDTOUR_SDK_SOURCE_DIR`, default
-`../rexglue-sdk-recomp`; `REXSDK_DIR` overrides it). NativeXRenderer compiles the SDK's graphics sources (the SPIR-V
+`../rexglue-sdk-recomp`; `REXSDK_DIR` overrides it). CMake automatically applies
+`patches/rexglue-sdk-set-remap-gate.patch` (Change 77, `SetRemapGate`) to that checkout on configure.
+NativeXRenderer compiles the SDK's graphics sources (the SPIR-V
 translator among them) in process and links the SDK's glslang and xxHash targets, none of which an installed SDK
 package carries, so the installed package is not enough. The launcher also uses the same tree through
 `RECOMP_LAUNCHER_SDK_DIR`.
@@ -87,9 +89,16 @@ rexglue codegen ghworldtour_manifest.toml
 - GHWT's FMOD mixes into a ring of two 256-sample blocks and polls whether the output has read the other one. The PC
   device frees frames in bursts of two, so without the console's 3 ms spacing FMOD misses the transitions: the videos
   (Bink) sound right, but from the title screen on the music plays as noise or stutters. The app sets
-  `audio_callback_min_interval_us = 3000` (unless the command line or a config sets it) and runs the audio worker in
-  Windows' "Pro Audio" class (`audio_thread_priority = true`). This is the same fix as GHMetalRecomp's
-  `C:\kilo\GHMetalRecomp\docs\menu-music.md`; a fork with FMOD mixing on the audio thread would use 0 instead.
+  `audio_callback_min_interval_us = 3000` when `ghworldtour_fmod_on_audio_thread` is off, or 0 when it is on (the
+  default, `src/fmod_mix.cpp`: FMOD mixes on the SDK's audio worker), unless the command line or a config sets it. It
+  also sets `audio_maxqframes = 4`, `audio_keep_time = true`, `audio_thread_priority = true` (Windows' "Pro Audio"
+  class), `audio_wasapi_exclusive_buffer_ms = 10`, `audio_wasapi_exclusive_queue = 2`, `vblank_timer_spin_us = 700`,
+  `critical_section_spin_us = 20` and `clear_memory_page_state = false`, each only while its cvar is still the default.
+  The log line `[audio] callback spacing 0 us, maxqframes 4, keep_time on, thread priority on, fmod_on_audio_thread on`
+  (`ghworldtour_087.log`) shows the effective values; whether the music stays clean through a song with spacing 0 is not
+  verified (no desktop session): if it plays as noise, set `--audio_callback_min_interval_us=3000` or
+  `--ghworldtour_fmod_on_audio_thread=false`. The fix for the noise itself is documented in GHMetalRecomp's
+  [menu-music.md](https://github.com/ElGuslml/GHMetalRecomp/blob/main/docs/menu-music.md).
 - The game plays on the **Windows default playback device** (SDL's console role). If that is a virtual device, for
   example "Speakers (Steam Streaming Microphone)" while Steam Remote Play is installed, the sound is crackly or
   muted. Set the real output (the monitor or speakers) as the default device, or check the endpoint the log names:
@@ -120,14 +129,37 @@ offers the SDK's **Strum with the frets** switch (`mnk_tap_target` / `gamepad_ta
 `launcher/game.h`): pressing a fret also presses the D-pad (a strum), so a controller or the keyboard can play without
 a strum bar. It is on by default for a fresh install (`kKeyboardTapDefault` / `kGamepadTapDefault` in `game.h`).
 
-The menus move their cursor with the D-pad, so the strum is gated to songs: `src/keyboard.cpp` hooks
+The menus move their cursor with the D-pad, so the strum is gated to songs: `src/input_gates.cpp` hooks
 `sub_82131658`, the per-player update GHWT runs every frame in a song (the equivalent of GH Metallica's
 `sub_82137F18`; both call their `sub_8213AB08`/`sub_821416A0` first), and opens the gate for 250 ms after each call.
 Verified by log: the hook does not run at the title screen and runs ~60 times a second in a song.
 
+## Controller layout (Guitar Hero III's)
+
+A standard controller in Guitar Hero III plays the guitar in a song: green on LT, red on LB, yellow on RB, blue on RT
+and orange on A; its menus keep A confirm and B go back. The launcher's Controls tab writes that per controller
+(`gamepad_device_remap`), which gives its controller's section:
+
+```
+a=lt,b=lb,y=rb,x=rt,lb=south,rb=west,lt=east,rt=north
+```
+
+Per controller, not a type's (`gamepad_remap`): an Xbox 360 guitar and an Xbox 360 controller are both SDL's
+`xbox360` type, so a type's layout would move a real guitar's frets too.
+
+Applied everywhere, that layout also puts confirm and cancel on the triggers in the menus (LT and LB) instead of A and
+B. `src/input_gates.cpp` therefore closes the SDK's remap gate (`rex::input::SetRemapGate`) outside a song, as it does
+the strum's: in a song the layout plays, in the menus (and paused) the controller plays the standard layout.
+
 ## Input latency
 
-GHWT runs at 60 FPS and has no higher-frame-rate patch. On a display whose refresh rate is not a whole multiple of 60
+GHWT runs at 60 FPS unless `ghworldtour_frame_rate` is set (120, 144, 160, 165 or 240, from `src/framerate.cpp`; the
+launcher's frame rate row writes it, and `src/startup.cpp` turns it into `video_mode_refresh_rate`, just under the
+display's rate when V-Sync is off). Boot-checked only: `ghworldtour_frame_rate=120 refresh=60` with frame generation (the
+game runs at half), `ghworldtour_088.log`, and 120 FPS high rate without frame generation: `ghworldtour_frame_rate=120 refresh=120`
+(`ghworldtour_090.log`), logging `[frame rate] script waits in game frames last as at 60 FPS (vblank at 120 Hz)`; pacing in a song
+is not measured. The timer frequency is kept stable via `src/timer.cpp` (`[timer] keeping the reported timer frequency (ghworldtour_timer_fix)`,
+`ghworldtour_087.log`). On a display whose refresh rate is not a whole multiple of 60
 (the log: `the timer at 60 Hz: the display 165 Hz is not a whole multiple of it`), V-Sync makes each frame wait in the
 present queue, which is input lag the game's calibration cannot remove. A fresh install therefore defaults V-Sync off
 (`kVsyncDefault = false` in `launcher/game.h`; the launcher writes `d3d12_allow_variable_refresh_rate_and_tearing = true`
@@ -154,7 +186,8 @@ wrong defaults.
 The game can be drawn by NativeXRenderer instead of the SDK's Xenos emulation (`--native_x_renderer=true`, or the
 launcher's Graphics page). The hooks and the XDK 2.0.7645 device layout are in
 `src/native_x_renderer_ghworldtour.cpp`; the library is the `native_x_renderer/` submodule (DiligentCore and its
-third-party submodules come with it). The mapping, the offsets, the scene resolve address and the verification steps
+third-party submodules come with it) plus `patches/native_x_renderer-dlssg-and-depth-upscale.patch`, applied by CMake
+at configure time. The mapping, the offsets, the scene resolve address and the verification steps
 are in [`native-x-renderer.md`](native-x-renderer.md).
 
 The renderer is the default (`kNativeXRendererDefault = true` in `launcher/game.h`); the Xenos path is the

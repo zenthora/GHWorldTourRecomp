@@ -9,7 +9,7 @@
 
 #include <native_x_renderer/native_x_renderer.h>
 
-#include "keyboard.h"
+#include "input_gates.h"
 #include "native_x_renderer_ghworldtour.h"
 #include "project.h"
 #include "startup.h"
@@ -36,24 +36,53 @@ class GhworldtourApp : public rex::ReXApp {
     if (!rex::cvar::Query<bool>("gamepad_whammy_rest")) {
       rex::cvar::SetFlagByName("gamepad_whammy_rest", "true");
     }
-    // GHWT's FMOD mixes into a ring of two 256-sample blocks and checks whether the output has read
-    // the other one; the PC device frees frames two at a time, so without the console's 3 ms
-    // spacing FMOD misses the transitions and the music from the title screen on plays as noise
-    // (the reference's docs/menu-music.md). Command-line and config values still win.
+    // With FMOD mixing on the SDK's audio worker after each frame (src/fmod_mix.cpp), the 3 ms
+    // callback spacing is no longer needed; if ghworldtour_fmod_on_audio_thread is off, keep the
+    // 3 ms spacing so FMOD's two-block ring does not miss transitions. Command-line and config
+    // values still win.
+    const bool fmod_on_audio_thread = rex::cvar::Query<bool>("ghworldtour_fmod_on_audio_thread");
     if (rex::cvar::GetFlagSource("audio_callback_min_interval_us") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("audio_callback_min_interval_us", "3000");
+      rex::cvar::SetFlagByName("audio_callback_min_interval_us",
+                               fmod_on_audio_thread ? "0" : "3000");
+    }
+    if (rex::cvar::GetFlagSource("audio_maxqframes") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_maxqframes", "4");
+    }
+    if (rex::cvar::GetFlagSource("audio_keep_time") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_keep_time", "true");
     }
     // The audio worker and the XMA decoder in Windows' "Pro Audio" class: a busy PC holds them up
     // less.
     if (rex::cvar::GetFlagSource("audio_thread_priority") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("audio_thread_priority", "true");
     }
-    REXLOG_INFO("[audio] callback spacing {} us, thread priority {}",
-                rex::cvar::Query<int32_t>("audio_callback_min_interval_us"),
-                rex::cvar::Query<bool>("audio_thread_priority") ? "on" : "off");
+    if (rex::cvar::GetFlagSource("audio_wasapi_exclusive_buffer_ms") ==
+        rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_wasapi_exclusive_buffer_ms", "10");
+    }
+    if (rex::cvar::GetFlagSource("audio_wasapi_exclusive_queue") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("audio_wasapi_exclusive_queue", "2");
+    }
+    if (rex::cvar::GetFlagSource("vblank_timer_spin_us") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("vblank_timer_spin_us", "700");
+    }
+    if (rex::cvar::GetFlagSource("critical_section_spin_us") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("critical_section_spin_us", "20");
+    }
+    if (rex::cvar::GetFlagSource("clear_memory_page_state") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("clear_memory_page_state", "false");
+    }
+    REXLOG_INFO(
+        "[audio] callback spacing {} us, maxqframes {}, keep_time {}, thread priority {}, "
+        "fmod_on_audio_thread {}",
+        rex::cvar::Query<int32_t>("audio_callback_min_interval_us"),
+        rex::cvar::Query<int32_t>("audio_maxqframes"),
+        rex::cvar::Query<bool>("audio_keep_time") ? "on" : "off",
+        rex::cvar::Query<bool>("audio_thread_priority") ? "on" : "off",
+        fmod_on_audio_thread ? "on" : "off");
     // The frets that "strum with the frets" presses (the launcher's switch writes the targets). On
     // by default: GHWT has no auto-strum, so a controller or the keyboard would have to strum and
-    // fret at once. The strum is gated to songs (src/keyboard.cpp), so the menus' D-pad is
+    // fret at once. The strum is gated to songs (src/input_gates.cpp), so the menus' D-pad is
     // unaffected.
     if (rex::cvar::GetFlagSource("mnk_tap_sources") == rex::cvar::Source::kDefault) {
       rex::cvar::SetFlagByName("mnk_tap_sources", "a,b,y,x,lb");
@@ -113,7 +142,7 @@ class GhworldtourApp : public rex::ReXApp {
     native_x_renderer::Initialize(ghworldtour::NativeXRendererProfile(),
                                   runtime() ? runtime()->graphics_system() : nullptr, window(),
                                   runtime() ? runtime()->cache_root() : std::filesystem::path());
-    // The "strum with the frets" option's gate: only in a song (src/keyboard.cpp).
-    ghworldtour::InitializeKeyboard();
+    // The "strum with the frets" and controller layout gates: only in a song (src/input_gates.cpp).
+    ghworldtour::InitializeInputGates();
   }
 };

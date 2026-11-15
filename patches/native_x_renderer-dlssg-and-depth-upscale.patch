@@ -1,0 +1,1719 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5d11237..74d3538 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -202,6 +202,9 @@ target_link_libraries(native_x_renderer PRIVATE
+ )
+ if(TARGET Diligent-SuperResolution-static AND DILIGENT_DLSS_SUPPORTED)
+   target_link_libraries(native_x_renderer PRIVATE Diligent-SuperResolution-static)
++  if(TARGET DLSS-Headers AND TARGET DLSS-NGX)
++    target_link_libraries(native_x_renderer PRIVATE DLSS-Headers DLSS-NGX)
++  endif()
+   target_compile_definitions(native_x_renderer PRIVATE NATIVE_X_RENDERER_DLSS=1)
+ endif()
+ # AMD FidelityFX Super Resolution 3.1 (src/fsr.cpp, D116): the FidelityFX API's headers (thirdparty/ffx_api, MIT) and
+@@ -231,12 +234,18 @@ endif()
+ rexglue_apply_target_settings(native_x_renderer)
+ 
+ # Copies what NativeXRenderer needs at run time next to a game's executable: NVIDIA's DLSS runtime
+-# (nvngx_dlss.dll), which NGX loads from the application's folder, and AMD's FidelityFX library
+-# (amd_fidelityfx_vk.dll, FSR 3.1), which fsr.cpp loads from there.
++# (nvngx_dlss.dll, and nvngx_dlssg.dll if bundled; otherwise NGX discovers DLSS-G from the NVIDIA driver
++# store) and AMD's FidelityFX library (amd_fidelityfx_vk.dll, FSR 3.1), which fsr.cpp and framegen.cpp load.
+ function(native_x_renderer_copy_runtime target)
+   if(COMMAND copy_dlss_dlls)
+     copy_dlss_dlls(${target})
+   endif()
++  if(DEFINED DLSS_BIN_DIR AND EXISTS "${DLSS_BIN_DIR}/nvngx_dlssg.dll")
++    add_custom_command(TARGET ${target} POST_BUILD
++                       COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLSS_BIN_DIR}/nvngx_dlssg.dll"
++                               "$<TARGET_FILE_DIR:${target}>/nvngx_dlssg.dll"
++                       COMMENT "Copying nvngx_dlssg.dll for ${target}")
++  endif()
+   if(NATIVE_X_RENDERER_FFX_DLL)
+     add_custom_command(TARGET ${target} POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NATIVE_X_RENDERER_FFX_DLL}"
+diff --git a/docs/decisions.md b/docs/decisions.md
+index 7a4acdd..1e5a6d8 100644
+--- a/docs/decisions.md
++++ b/docs/decisions.md
+@@ -6,6 +6,21 @@ end, and do not rewrite old ones. If a decision changes, add a new entry that su
+ The project was called **XenosNative** until D58. Entries D1–D57 keep that name: read `XenosNative` as
+ NativeXRenderer, and `xenos_native` (folders, cvars, namespace) as `native_x_renderer`.
+ 
++## Where to look
++
++The log is chronological. Find an entry by subsystem here, then grep its D-number:
++
++- **Architecture, bring-up, phases:** D1–D31.
++- **Render scale, antialiasing, aspect:** D37–D44, D50.
++- **Upscaling (DLSS, FSR 3.1, DLAA, the modes):** D46–D49, D53, D116–D122.
++- **The main 3D view and its upscale point:** D118–D121, D138–D139.
++- **Frame generation:** D123–D124.
++- **Reduced copies of the screen:** D127–D128.
++- **Resolves, tiling, MSAA and depth aliases:** D60, D64–D65, D80, D95, D112–D113.
++- **Pipelines and the pipeline list:** D129–D136.
++- **Performance and threading:** D68–D73, D81–D83, D98–D100, D108–D110.
++- **Profiles and the launcher:** D25, D54, D56, D66–D67, D92, D137.
++
+ ---
+ 
+ ## D1 — Replace the D3D layer, not the GPU (2026-10-13)
+@@ -4787,3 +4802,163 @@ condition variable costs microseconds more than the spin).
+ - The Xenos path keeps the 2 bits.
+ 
+ **Revisit if:** a game reads a `2_10_10_10_FLOAT` copy's alpha as a mask that expects the format's 4 steps.
++
++## D138 — The upscale point at a depth resolve, for a game that never copies its color (2026-11-10)
++
++**Decision:**
++- **`Profile::upscale_resolve_depth`:** with `upscale_resolve_caller`, the copy that ends the main 3D view may resolve the
++  view's *depth* into a color texture. The upscale point then accepts a depth surface of the output size instead of
++  requiring a color one. The view's color stays the target its draws last made (`g_scene_color`); the depth the upscaler
++  reads is the view's own.
++- **GH World Tour's profile sets it.** Its other boundary fields are unchanged: `upscale_resolve_caller =
++  scene_resolve_caller = 0x824AE0D0`, `unscaled_screen_fractions` (D127), no view hooks.
++
++**Why:**
++- **GHWT never copies its 1280x720 color.** A trace dump of a song (`ghworldtour_035`, frame 12000) counts 7 resolves a
++  frame; the frame's 1280x720 color target is resolved only at 640x360 through the 4x MSAA surface the post-processing
++  downsamples with (D95's alias), and the depth is resolved at 1280x720 into `0xABA26C00`
++  (`sub_824ADED0`, return address `0x824AE0D0`) for the depth of field.
++- **Without the flag nothing started.** `upscale_resolve_caller` was set, so `g_auto_views` was on (D119), but the point
++  was guarded by `!surface.depth` and `surface.width == output_width` (D119): every resolve at that caller was the depth
++  one, so the view never ended. `DLAA applied 0 times in 600 frames`, and the camera vote never ran (`0 of 0 views
++  voted`), from boot through the attract mode and into a song. The view did start — the first depth-writing 1280x720 draw
++  with a perspective matrix — so 3D was jittered with no upscale to undo it.
++- **The depth copy is the right boundary anyway.** It is the last thing the view does before the post-processing reads
++  the scene, and the 2D layer (the HUD, the note highway) is drawn after it, so it stays outside the jitter and the
++  temporal history.
++- **The alternative, a color resolve at another caller, does not exist.** Sent to the whole 1280x720 color target there
++  is none; the 640x360 one is a reduced copy (D127 keeps it at its guest size), which the upscaler must not take.
++
++**Evidence** (this machine, RTX 4070 Ti, Vulkan 1.4, `tools/runs/dlaa2`):
++- `DLAA applied 600 times in 600 frames`, camera vote `600 of 600 views voted` (156-277 offers, 151-262 votes for the
++  winner per view) across the attract mode's scenes at 1280x720; the note highway and the HUD keep their 1:1 pixels.
++- The frames before the fix, same command: `0 times in 600 frames`, `0 of 0 views voted`, from frame 1 to the song.
++
++**Limits:**
++- The upscaler runs one call earlier than a color copy would: at the depth resolve, the color target is the view's last
++  drawn target, and the game must not draw into it between that resolve and its own post-processing.
++- A game that resolves depth at several callers, some outside its view, needs one boundary caller that is inside it.
++
++**Revisit if:** GHWT is found to draw into its 1280x720 target after the depth resolve but inside the view (a decal pass,
++a second scene layer), or if another game shows the same "no output-sized color copy" shape.
++## D139 — The 3D view's state in the log, and why an upscale point did not run (2026-11-10)
++
++**Decision:**
++- **One line when the 3D view's state has persisted 30 frames (half a second):** `3D view: none`, `3D view: found, but
++  its upscale point 0x... did not run this frame` (a warning, with the auto views on), `3D view: found (no temporal
++  upscaler)`, or `3D view: upscaled at the profile's point 0x...`. A state that alternates frame to frame writes nothing.
++- **A resolve at the profile's `upscale_resolve_caller` that is not the view's end logs why, once:** no surface, not the
++  output size, or a depth surface with `upscale_resolve_depth` unset (D138).
++- **A warning once, 600 frames after the first 3D view,** when `upscale_resolve_caller` is set and its point has still
++  never run: DLSS or FSR 3.1 cannot start without it.
++
++**Why:**
++- **A silent mismatch looked exactly like "no 3D scene".** GH World Tour logged `DLAA applied 0 times in 600 frames` and
++  `0 of 0 views voted` through the attract mode and a song, while the view was in fact starting (a perspective-matrix
++  draw of the output size) and the resolve at the profile's point was being rejected for being a depth surface. An
++  agent (and a player reading the log) could not tell "the upscaler is off" from "we are in a menu" without patching the
++  library to print the reason.
++- **The check is cheap and bounded:** the state is computed once a frame from two booleans, and a state must hold for
++  30 frames before it is written, so a menu whose view comes and goes writes nothing and a song writes one line.
++- **It names the profile field it is about** (`upscale_resolve_caller`, D119), which is the first thing a new game's
++  porting needs to verify.
++
++**Evidence** (GH World Tour, `tools/runs/dlaa2` and `ghworldtour_058`):
++- Before: no line; `DLAA applied 0 times` with the profile's point set was ambiguous between no view and a rejected
++  point. After D138, `3D view: upscaled at the profile's point 0x824ae0d0` and `DLAA applied 600 times in 600 frames`.
++
++**Limits:**
++- The state is per frame, so a frame that draws 3D but does not reach the point logs `found, but` (a game whose view
++  ends at Present in menu frames will alternate `found, but` and `upscaled`, and the 30-frame rule then writes neither).
++- `3D view: none` includes a frame with a view that never drew (unlikely) and a frame whose view hooks were never
++  called.
++
++**Revisit if:** a 3D view legitimately lasts fewer than 30 frames at a time (a preview thumbnail) and its absence from
++the log misleads.
++
++## D140 — Single-pass motion + depth copy and camera-cut temporal reset in `Upscaler::Apply` (2026-11-14)
++
++**Decision:**
++- **Single-pass motion + depth copy (`motion_depth_pso_`):** When `depth_copy_` is required (FSR 3.1 upscaling or frame
++  generation inputs `frame_inputs_on_`), `Upscaler::Apply` binds both `motion_` (`TEX_FORMAT_RG16_FLOAT`, location 0)
++  and `depth_copy_` (`TEX_FORMAT_R32_FLOAT`, location 1) in a single fullscreen pass (`kMotionAndDepthPS`), eliminating
++  the separate `CopyDepth` fullscreen pass that previously re-read `depth_srv` immediately after `motion_pso_`.
++- **Camera-cut / scene-jump auto-reset:** Before writing reprojection constants in `Upscaler::Apply`, clip-space center
++  `(0, 0, 0.5, 1)` is projected through the active column-major reprojection matrix (`from_vote` or `from_view`). If the
++  reprojected homogeneous `w <= 1e-6`, any component is non-finite, or the single-frame NDC displacement
++  `max(|ndc_x|, |ndc_y|) > 0.75`, `reset = true` is forced so DLAA/DLSS, FSR 3.1, and Frame Generation reset temporal
++  history cleanly instead of ghosting across discontinuous camera cuts.
++
++**Why:**
++- `kMotionPS` already samples `depthTex.Load(int3(sv_pos.xy, 0)).r` and normalizes depth into `[0, 1]` with `0` at the
++  near plane. Writing that normalized depth to `SV_Target1` in the same pass avoids a second fullscreen pass, pipeline
++  switch, and redundant full-resolution depth read every frame when FSR 3.1 or Frame Generation is active.
++- Stage camera cuts in GH World Tour jump instantaneously between viewpoints while keeping a valid invertible
++  view-projection matrix on consecutive frames; without an NDC displacement check, `last_applied_frame_ + 1 == frame_`
++  kept temporal history across the cut and fed full-screen motion vectors into the temporal upscaler and frame generator.
++
++**Limits:**
++- An extremely fast whip-pan exceeding 75% of the screen width/height in a single frame also triggers a 1-frame temporal
++  history reset, which is benign because motion vectors of that magnitude cannot be temporally accumulated cleanly.
++
++**Revisit if:** a game uses an off-center projection where `(0, 0, 0.5, 1)` is outside the view frustum.
++
++## D141 — Stamping `output->written` after reduced-resolution `UpscaleScene` at depth-resolve boundaries (2026-11-14)
++
++**Decision:**
++- In `UpscaleScene` (`renderer.cpp`), when `g_upscaler.Apply` upscales the reduced-resolution 3D scene target
++  (`g_scene_color`, `Kind::kReduced`) into the full render-scale target (`output`, `Kind::kRender`), stamp
++  `output->written = ++g_target_writes;` whenever `upscaled && output != g_scene_color`.
++
++**Why:**
++- With `upscale_resolve_depth = true` (D138), GH World Tour ends its main 3D view at the `0x824AE0D0` depth resolve rather
++  than a full-resolution color resolve, and immediately afterward resolves EDRAM color base `0` through a `640x360` 4x
++  MSAA alias (`RenderTargets::FindMsaaAlias`).
++- `RenderTargets::FindMsaaAlias` and `RenderTargets::Get` select between `Kind::kReduced` and `Kind::kRender` targets at
++  the same EDRAM base by comparing their `written` sequence numbers. Because `UpscaleScene` wrote into `output->texture`
++  via `g_upscaler.Apply` without advancing `output->written`, `g_scene_color->written` (from the last 3D draw) remained
++  newer than `output->written`, causing subsequent post-processing and 2D resolve passes to sample the un-upscaled
++  reduced-resolution `g_scene_color` target instead of the upscaled `Kind::kRender` target in DLSS/FSR Quality,
++  Balanced, and Performance modes.
++
++**Limits:**
++- Applies only when `output != g_scene_color` (upscaling modes where `g_reduced` is active).
++
++**Revisit if:** `UpscaleScene` is ever called on a target that should not become the newest EDRAM base owner.
++
++## D142 — NVIDIA Frame Generation (DLSS-G via NGX Vulkan) with automatic AMD FidelityFX fallback (2026-11-14)
++
++**Decision:**
++- Add `native_x_renderer_frame_generation_provider` (`"auto"` default, `"nvidia"`/`"dlssg"`, `"amd"`/`"fsr3"`).
++- In `device.cpp` (`ProbeVulkanSupport`, under `NATIVE_X_RENDERER_DLSS`), query
++  `NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements` and
++  `NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements` for `NVSDK_NGX_Feature_FrameGeneration` and
++  `NVSDK_NGX_Feature_SuperSampling` before creating the DiligentCore Vulkan instance/device, enabling supported
++  extensions and `Features.NativeFence = DEVICE_FEATURE_STATE_OPTIONAL` (`VK_KHR_timeline_semaphore`).
++- In `framegen.{h,cpp}`, add an NVIDIA NGX DLSS-G backend alongside AMD FidelityFX (`amd_fidelityfx_vk.dll`):
++  - Query capability via `NVSDK_NGX_VULKAN_GetCapabilityParameters` (`NVSDK_NGX_Parameter_FrameGeneration_Available`),
++    initializing NGX with `NVSDK_NGX_VULKAN_Init_with_ProjectID` when not already initialized by `DLSSProviderVk`.
++  - Create the DLSS-G feature via `NGX_VK_CREATE_DLSSG` and evaluate via `NGX_VK_EVALUATE_DLSSG` into `output_` using
++    `pBackbuffer` (`current`), `pDepth` (`view.depth`), `pMVecs` (`view.motion` with
++    `mvecScale = {1.0f / motion_width, 1.0f / motion_height}`), `pHudless` (`hudless`), and camera/jitter/subrect
++    parameters.
++  - When `provider == "auto"`, if `FrameGeneration.Available == 0` or `NGX_VK_CREATE_DLSSG` fails on the current
++    GPU/driver/swapchain configuration, log the NGX status code clearly and fall back seamlessly to AMD FidelityFX
++    (`amd_fidelityfx_vk.dll`).
++- In `CMakeLists.txt`, link `DLSS-Headers` and `DLSS-NGX` to `native_x_renderer` when DLSS is enabled and copy
++  `nvngx_dlssg.dll` in `native_x_renderer_copy_runtime` if present alongside `nvngx_dlss.dll`.
++
++**Why:**
++- NVIDIA's `nvsdk_ngx_d.lib` exports the Vulkan NGX entry points (`NVSDK_NGX_VULKAN_*`), and `nvngx_dlssg.dll` is
++  discovered either from the application directory or from the NVIDIA display driver store via NGX's feature discovery.
++- Using `output_` (`pOutputInterpFrame`) with our existing swapchain dual-present path (D123) avoids replacing
++  DiligentCore's Vulkan swapchain while supporting both NVIDIA DLSS-G and AMD FSR 3.1 frame generation under one
++  interface.
++- Seamless fallback in `"auto"` mode ensures non-RTX-40/50 GPUs or environments where NGX disallows standalone Vulkan
++  DLSS-G creation without an interposer continue to get working frame generation via AMD FidelityFX.
++
++**Limits:**
++- Evaluates 2x frame generation (`multiFrameCount = 1`, `multiFrameIndex = 1`), matching the renderer's single
++  interpolated frame presentation before the real frame (D123).
++
++**Revisit if:** multi-frame generation (3x/4x) pacing is added to `ExecutePresent`.
+diff --git a/include/native_x_renderer/native_x_renderer.h b/include/native_x_renderer/native_x_renderer.h
+index 483aeeb..c98fd1b 100644
+--- a/include/native_x_renderer/native_x_renderer.h
++++ b/include/native_x_renderer/native_x_renderer.h
+@@ -165,6 +165,12 @@ struct Profile {
+   // ends here, where DLSS or FSR 3.1 runs on it before the copy. It may be scene_resolve_caller (GH Metallica: its
+   // copy comes before its HUD and note highway, which stay out of the view). 0: no DLSS or FSR 3.1 without hooks.
+   uint32_t upscale_resolve_caller = 0;
++  // With upscale_resolve_caller: what that copy resolves is the view's depth, into a color texture (the game resolves
++  // the 3D view's depth for its depth-of-field before it reads the color; GH World Tour's sub_824ADED0 resolves the
++  // 1280x720 depth into 0xABA26C00, and the same Resolve is where the view ends). The upscale point then accepts a
++  // depth surface bound for the source: the view's color is still the target its draws made, and the depth is the one
++  // the upscaler wants. False: only a color resolve of the output size is the view's end.
++  bool upscale_resolve_depth = false;
+   // The game draws its 2D layer after the main 3D view (its HUD; GH Metallica's note highway and notes) with inline
+   // vertices whose first two floats are their position in pixels of the output canvas (output_width x output_height).
+   // With frame generation those draws' motion comes from their vertices, each draw matched with the last frame's
+diff --git a/src/device.cpp b/src/device.cpp
+index 45130c2..9aa7da5 100644
+--- a/src/device.cpp
++++ b/src/device.cpp
+@@ -12,6 +12,7 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <iterator>
++#include <string>
+ #include <vector>
+ 
+ #include "EngineFactoryVk.h"
+@@ -36,6 +37,10 @@
+ #include <windows.h>
+ #endif
+ 
++#if NATIVE_X_RENDERER_DLSS
++#include <nvsdk_ngx_vk.h>
++#endif
++
+ REXCVAR_DEFINE_STRING(native_x_renderer_present_mode, "", "NativeXRenderer",
+                       "How frames reach the screen (D106, D107): empty = MAILBOX (no tearing, no wait for the "
+                       "display), else IMMEDIATE (tearing); \"vsync\" = FIFO, each frame shown once, never torn; "
+@@ -85,17 +90,32 @@ void DILIGENT_CALL_TYPE OnDiligentMessage(DEBUG_MESSAGE_SEVERITY severity, const
+ 
+ namespace {
+ 
+-// Whether the GPU Vulkan picks has graphics pipeline libraries with fast linking (D132), and an NVIDIA one when
+-// `nvidia_only`; asked through the Vulkan loader before DiligentCore creates its device (an extension it does not have
+-// would fail the device). `reason` says why not.
+-bool PipelineLibrarySupported(bool nvidia_only, std::string& reason) {
++struct VulkanProbeResult {
++  bool pipeline_library = false;
++  std::vector<std::string> ngx_instance_extensions;
++  std::vector<std::string> ngx_device_extensions;
++};
++
++// Queries the Vulkan loader before DiligentCore creates its instance/device:
++// 1. Whether the GPU Vulkan picks has graphics pipeline libraries with fast linking (D132), and an NVIDIA one when
++//    `nvidia_only`; `reason` says why not.
++// 2. When NATIVE_X_RENDERER_DLSS is enabled, the instance and device extensions required by NGX DLSS-G
++//    (NVSDK_NGX_Feature_FrameGeneration) and DLSS-SR (NVSDK_NGX_Feature_SuperSampling), filtered to extensions the
++//    loader and physical device actually expose (D142).
++VulkanProbeResult ProbeVulkanSupport(bool check_library, bool nvidia_only, std::string& reason) {
++  VulkanProbeResult result;
+ #ifdef _WIN32
++#if !NATIVE_X_RENDERER_DLSS
++  if (!check_library) return result;
++#endif
+   HMODULE loader = LoadLibraryW(L"vulkan-1.dll");
+   if (!loader) {
+-    reason = "no Vulkan loader";
+-    return false;
++    if (check_library) reason = "no Vulkan loader";
++    return result;
+   }
+   auto get = [&](const char* name) { return reinterpret_cast<void*>(GetProcAddress(loader, name)); };
++  auto enumerate_instance_extensions =
++      reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(get("vkEnumerateInstanceExtensionProperties"));
+   auto create_instance = reinterpret_cast<PFN_vkCreateInstance>(get("vkCreateInstance"));
+   auto destroy_instance = reinterpret_cast<PFN_vkDestroyInstance>(get("vkDestroyInstance"));
+   auto enumerate_devices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(get("vkEnumeratePhysicalDevices"));
+@@ -103,10 +123,11 @@ bool PipelineLibrarySupported(bool nvidia_only, std::string& reason) {
+   auto properties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(get("vkGetPhysicalDeviceProperties2"));
+   auto features2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get("vkGetPhysicalDeviceFeatures2"));
+   auto extensions = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(get("vkEnumerateDeviceExtensionProperties"));
+-  if (!create_instance || !destroy_instance || !enumerate_devices || !properties || !properties2 || !features2 ||
+-      !extensions) {
+-    reason = "an old Vulkan loader";
+-    return false;
++  if (!enumerate_instance_extensions || !create_instance || !destroy_instance || !enumerate_devices || !properties ||
++      !properties2 || !features2 || !extensions) {
++    if (check_library) reason = "an old Vulkan loader";
++    FreeLibrary(loader);
++    return result;
+   }
+   VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+   application.apiVersion = VK_API_VERSION_1_3;
+@@ -114,56 +135,152 @@ bool PipelineLibrarySupported(bool nvidia_only, std::string& reason) {
+   info.pApplicationInfo = &application;
+   VkInstance instance = VK_NULL_HANDLE;
+   if (create_instance(&info, nullptr, &instance) != VK_SUCCESS) {
+-    reason = "no Vulkan 1.3 instance";
++    if (check_library) reason = "no Vulkan 1.3 instance";
++    FreeLibrary(loader);
++    return result;
++  }
++
++#if NATIVE_X_RENDERER_DLSS
++  constexpr const char* kNgxProjectId = "750fed3a-efba-42ba-801b-22d4cbad9148";
++  constexpr NVSDK_NGX_Feature kNgxFeatures[] = {
++      NVSDK_NGX_Feature_FrameGeneration,
++      NVSDK_NGX_Feature_SuperSampling,
++  };
++  NVSDK_NGX_FeatureCommonInfo ngx_common_info{};
++  auto make_ngx_discovery = [&](NVSDK_NGX_Feature feature) {
++    NVSDK_NGX_FeatureDiscoveryInfo discovery{};
++    discovery.SDKVersion = NVSDK_NGX_Version_API;
++    discovery.FeatureID = feature;
++    discovery.Identifier.IdentifierType = NVSDK_NGX_Application_Identifier_Type_Project_Id;
++    discovery.Identifier.v.ProjectDesc.ProjectId = kNgxProjectId;
++    discovery.Identifier.v.ProjectDesc.EngineType = NVSDK_NGX_ENGINE_TYPE_CUSTOM;
++    discovery.Identifier.v.ProjectDesc.EngineVersion = "0";
++    discovery.ApplicationDataPath = L".";
++    discovery.FeatureInfo = &ngx_common_info;
++    return discovery;
++  };
++  auto has_extension = [](const std::vector<VkExtensionProperties>& list, const char* name) {
++    for (const VkExtensionProperties& e : list) {
++      if (std::strcmp(e.extensionName, name) == 0) return true;
++    }
+     return false;
++  };
++  auto add_unique = [](std::vector<std::string>& dst, const char* name) {
++    for (const std::string& existing : dst) {
++      if (existing == name) return;
++    }
++    dst.emplace_back(name);
++  };
++  // DiligentCore's Instance::Create unconditionally adds these without deduplicating EngineVkCreateInfo's list.
++  auto is_diligent_builtin_instance_ext = [](const char* name) {
++    return std::strcmp(name, "VK_KHR_surface") == 0 || std::strcmp(name, "VK_KHR_win32_surface") == 0 ||
++           std::strcmp(name, "VK_KHR_get_physical_device_properties2") == 0 ||
++           std::strcmp(name, "VK_EXT_debug_utils") == 0 || std::strcmp(name, "VK_EXT_debug_report") == 0;
++  };
++
++  uint32_t instance_ext_count = 0;
++  enumerate_instance_extensions(nullptr, &instance_ext_count, nullptr);
++  std::vector<VkExtensionProperties> instance_ext_list(instance_ext_count);
++  if (instance_ext_count) enumerate_instance_extensions(nullptr, &instance_ext_count, instance_ext_list.data());
++  for (NVSDK_NGX_Feature feature : kNgxFeatures) {
++    NVSDK_NGX_FeatureDiscoveryInfo discovery = make_ngx_discovery(feature);
++    uint32_t ngx_count = 0;
++    VkExtensionProperties* ngx_exts = nullptr;
++    if (NVSDK_NGX_SUCCEED(
++            NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements(&discovery, &ngx_count, &ngx_exts)) &&
++        ngx_exts) {
++      for (uint32_t i = 0; i < ngx_count; ++i) {
++        const char* name = ngx_exts[i].extensionName;
++        if (!is_diligent_builtin_instance_ext(name) && has_extension(instance_ext_list, name)) {
++          add_unique(result.ngx_instance_extensions, name);
++        }
++      }
++    }
+   }
+-  bool supported = false;
+-  reason = nvidia_only ? "no NVIDIA GPU" : "no GPU";
++#endif
++
++  if (check_library) reason = nvidia_only ? "no NVIDIA GPU" : "no GPU";
+   uint32_t count = 0;
+   enumerate_devices(instance, &count, nullptr);
+   std::vector<VkPhysicalDevice> devices(count);
+   if (count) enumerate_devices(instance, &count, devices.data());
++  bool library_done = !check_library;
++#if NATIVE_X_RENDERER_DLSS
++  bool ngx_done = false;
++#else
++  bool ngx_done = true;
++#endif
+   for (VkPhysicalDevice device : devices) {
+     VkPhysicalDeviceProperties p{};
+     properties(device, &p);
+     if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && devices.size() > 1) continue;
+-    if (nvidia_only && p.vendorID != 0x10DE) continue;
+-    if (p.apiVersion < VK_API_VERSION_1_3) {
+-      reason = "Vulkan 1.3 missing";
+-      continue;
+-    }
++    const bool check_lib_here = !library_done && (!nvidia_only || p.vendorID == 0x10DE);
++    const bool check_ngx_here = !ngx_done && p.vendorID == 0x10DE;
++    if (!check_lib_here && !check_ngx_here) continue;
++
+     uint32_t extension_count = 0;
+     extensions(device, nullptr, &extension_count, nullptr);
+     std::vector<VkExtensionProperties> list(extension_count);
+     if (extension_count) extensions(device, nullptr, &extension_count, list.data());
+-    bool library = false, graphics_library = false;
+-    for (const VkExtensionProperties& e : list) {
+-      library |= std::strcmp(e.extensionName, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) == 0;
+-      graphics_library |= std::strcmp(e.extensionName, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) == 0;
+-    }
+-    if (!library || !graphics_library) {
+-      reason = "the driver has no graphics pipeline libraries";
+-      continue;
++
++#if NATIVE_X_RENDERER_DLSS
++    if (check_ngx_here) {
++      for (NVSDK_NGX_Feature feature : kNgxFeatures) {
++        NVSDK_NGX_FeatureDiscoveryInfo discovery = make_ngx_discovery(feature);
++        uint32_t ngx_count = 0;
++        VkExtensionProperties* ngx_exts = nullptr;
++        if (NVSDK_NGX_SUCCEED(NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(instance, device, &discovery,
++                                                                                     &ngx_count, &ngx_exts)) &&
++            ngx_exts) {
++          for (uint32_t i = 0; i < ngx_count; ++i) {
++            const char* name = ngx_exts[i].extensionName;
++            if (has_extension(list, name)) add_unique(result.ngx_device_extensions, name);
++          }
++        }
++      }
++      ngx_done = true;
+     }
+-    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT f{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
+-    VkPhysicalDeviceFeatures2 all_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f};
+-    features2(device, &all_features);
+-    VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT lp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT};
+-    VkPhysicalDeviceProperties2 all_properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &lp};
+-    properties2(device, &all_properties);
+-    if (!f.graphicsPipelineLibrary || !lp.graphicsPipelineLibraryFastLinking) {
+-      reason = "the driver's graphics pipeline libraries have no fast linking";
+-      continue;
++#endif
++
++    if (check_lib_here) {
++      if (p.apiVersion < VK_API_VERSION_1_3) {
++        reason = "Vulkan 1.3 missing";
++      } else {
++        bool library = false, graphics_library = false;
++        for (const VkExtensionProperties& e : list) {
++          library |= std::strcmp(e.extensionName, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) == 0;
++          graphics_library |= std::strcmp(e.extensionName, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) == 0;
++        }
++        if (!library || !graphics_library) {
++          reason = "the driver has no graphics pipeline libraries";
++        } else {
++          VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT f{
++              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
++          VkPhysicalDeviceFeatures2 all_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f};
++          features2(device, &all_features);
++          VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT lp{
++              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT};
++          VkPhysicalDeviceProperties2 all_properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &lp};
++          properties2(device, &all_properties);
++          if (!f.graphicsPipelineLibrary || !lp.graphicsPipelineLibraryFastLinking) {
++            reason = "the driver's graphics pipeline libraries have no fast linking";
++          } else {
++            result.pipeline_library = true;
++            library_done = true;
++          }
++        }
++      }
+     }
+-    supported = true;
+-    break;
++    if (library_done && ngx_done) break;
+   }
+   destroy_instance(instance, nullptr);
+-  return supported;
++  FreeLibrary(loader);
++  return result;
+ #else
++  (void)check_library;
+   (void)nvidia_only;
+   reason = "not on this system";
+-  return false;
++  return result;
+ #endif
+ }
+ 
+@@ -201,13 +318,16 @@ bool Device::Create(void* native_window, bool half_precision, uint32_t compile_t
+   // (a level, a new effect), and the game's own threads need the CPU.
+   create_info.Features.AsyncShaderCompilation = DEVICE_FEATURE_STATE_OPTIONAL;
+   if (half_precision) create_info.Features.ShaderFloat16 = DEVICE_FEATURE_STATE_OPTIONAL;
++#if NATIVE_X_RENDERER_DLSS
++  create_info.Features.NativeFence = DEVICE_FEATURE_STATE_OPTIONAL;
++#endif
+   create_info.NumAsyncShaderCompilationThreads = compile_threads ? compile_threads : 4;
+   // D130: no render pass or framebuffer objects; DiligentCore begins and ends rendering itself (vkCmdBeginRendering).
+   if (REXCVAR_GET(native_x_renderer_dynamic_rendering)) {
+     create_info.FeaturesVk.DynamicRendering = DEVICE_FEATURE_STATE_OPTIONAL;
+   }
+   // D132: the two extensions and the feature, asked for only where the GPU has them (DiligentCore fails a device whose
+-  // extension is missing).
++  // extension is missing). D142: NGX instance and device extensions for DLSS-G and DLSS-SR are queried alongside.
+   static const char* const kLibraryExtensions[] = {VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
+                                                    VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME};
+   VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT library_features{
+@@ -215,19 +335,48 @@ bool Device::Create(void* native_window, bool half_precision, uint32_t compile_t
+   library_features.graphicsPipelineLibrary = VK_TRUE;
+   const std::string& library_mode = REXCVAR_GET(native_x_renderer_pipeline_library);
+   std::string library_reason = "native_x_renderer_pipeline_library off";
+-  bool library = false;
+-  if (library_mode != "off") {
+-    if (!REXCVAR_GET(native_x_renderer_dynamic_rendering)) {
+-      library_reason = "dynamic rendering off (D130)";
+-    } else {
+-      library = PipelineLibrarySupported(library_mode == "auto", library_reason);
+-    }
++  const bool check_library = library_mode != "off" && REXCVAR_GET(native_x_renderer_dynamic_rendering);
++  if (library_mode != "off" && !check_library) {
++    library_reason = "dynamic rendering off (D130)";
+   }
++  VulkanProbeResult probe = ProbeVulkanSupport(check_library, library_mode == "auto", library_reason);
++  const bool library = probe.pipeline_library;
++
++  std::vector<const char*> instance_extensions;
++  instance_extensions.reserve(probe.ngx_instance_extensions.size());
++  for (const std::string& ext : probe.ngx_instance_extensions) {
++    instance_extensions.push_back(ext.c_str());
++  }
++  if (!instance_extensions.empty()) {
++    create_info.InstanceExtensionCount = uint32_t(instance_extensions.size());
++    create_info.ppInstanceExtensionNames = instance_extensions.data();
++  }
++
++  std::vector<const char*> device_extensions;
+   if (library) {
+-    create_info.DeviceExtensionCount = uint32_t(std::size(kLibraryExtensions));
+-    create_info.ppDeviceExtensionNames = kLibraryExtensions;
++    for (const char* ext : kLibraryExtensions) device_extensions.push_back(ext);
+     create_info.pDeviceExtensionFeatures = &library_features;
+   }
++  for (const std::string& ext : probe.ngx_device_extensions) {
++    bool duplicate = false;
++    for (const char* existing : device_extensions) {
++      if (std::strcmp(existing, ext.c_str()) == 0) {
++        duplicate = true;
++        break;
++      }
++    }
++    if (!duplicate) device_extensions.push_back(ext.c_str());
++  }
++  if (!device_extensions.empty()) {
++    create_info.DeviceExtensionCount = uint32_t(device_extensions.size());
++    create_info.ppDeviceExtensionNames = device_extensions.data();
++  }
++#if NATIVE_X_RENDERER_DLSS
++  if (!probe.ngx_instance_extensions.empty() || !probe.ngx_device_extensions.empty()) {
++    REXLOG_INFO("[native_x_renderer] NGX Vulkan extensions (D142): {} instance, {} device",
++                probe.ngx_instance_extensions.size(), probe.ngx_device_extensions.size());
++  }
++#endif
+   // Every draw maps its constant buffers from the dynamic heap (system, bool/loop and fetch constants:
+   // 1.4 KB, plus the float constants its shaders use), with several frames in flight.
+   create_info.DynamicHeapSize = 256 << 20;
+diff --git a/src/framegen.cpp b/src/framegen.cpp
+index f609c68..d47b777 100644
+--- a/src/framegen.cpp
++++ b/src/framegen.cpp
+@@ -6,21 +6,29 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <cctype>
+ #include <chrono>
+ #include <string>
+ 
+-#if NATIVE_X_RENDERER_FSR
++#if NATIVE_X_RENDERER_FSR || NATIVE_X_RENDERER_DLSS
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
+ #ifndef NOMINMAX
+ #define NOMINMAX
+ #endif
+ #include <windows.h>
+ #endif
+ // DiligentCore's Vulkan interfaces need the Vulkan types first.
++#ifndef VK_NO_PROTOTYPES
++#define VK_NO_PROTOTYPES
++#endif
+ #include <vulkan/vulkan.h>
+ 
+ #include "DeviceContextVk.h"
+ #include "RenderDeviceVk.h"
+ #include "TextureVk.h"
++#include "TextureViewVk.h"
+ 
+ #if NATIVE_X_RENDERER_FSR
+ #include "ffx_api.h"
+@@ -28,13 +36,88 @@
+ #include "vk/ffx_api_vk.h"
+ #endif
+ 
++#if NATIVE_X_RENDERER_DLSS
++#include <nvsdk_ngx_helpers_dlssg_vk.h>
++#include <nvsdk_ngx_helpers_vk.h>
++#endif
++
+ namespace native_x_renderer {
+ 
+ using namespace Diligent;
+ 
+-#if NATIVE_X_RENDERER_FSR
+ namespace {
+ 
++bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
++  if (a.size() != b.size()) return false;
++  for (size_t i = 0; i < a.size(); ++i) {
++    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) return false;
++  }
++  return true;
++}
++
++#if NATIVE_X_RENDERER_FSR || NATIVE_X_RENDERER_DLSS
++std::string WideToAscii(const wchar_t* wide) {
++  std::string text;
++  for (const wchar_t* c = wide; c && *c; ++c) text += *c < 128 ? char(*c) : '?';
++  return text;
++}
++
++std::wstring ExecutableFolder() {
++  wchar_t path[MAX_PATH] = {};
++  DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
++  std::wstring folder(path, length);
++  size_t slash = folder.find_last_of(L"\\/");
++  if (slash != std::wstring::npos) {
++    folder.resize(slash + 1);
++  } else {
++    folder.clear();
++  }
++  return folder;
++}
++#endif
++
++#if NATIVE_X_RENDERER_DLSS
++constexpr const char* kNgxProjectId = "750fed3a-efba-42ba-801b-22d4cbad9148";
++
++std::string NarrowNgxResult(NVSDK_NGX_Result result) {
++  const wchar_t* wide = GetNGXResultAsString(result);
++  std::string text = WideToAscii(wide);
++  return text.empty() ? "NVSDK_NGX_Result" : text;
++}
++
++VkFormat ToVkFormat(TEXTURE_FORMAT format) {
++  switch (format) {
++    case TEX_FORMAT_RGBA8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
++    case TEX_FORMAT_RGBA8_UNORM_SRGB: return VK_FORMAT_R8G8B8A8_SRGB;
++    case TEX_FORMAT_BGRA8_UNORM: return VK_FORMAT_B8G8R8A8_UNORM;
++    case TEX_FORMAT_BGRA8_UNORM_SRGB: return VK_FORMAT_B8G8R8A8_SRGB;
++    case TEX_FORMAT_RG16_FLOAT: return VK_FORMAT_R16G16_SFLOAT;
++    case TEX_FORMAT_R32_FLOAT: return VK_FORMAT_R32_SFLOAT;
++    case TEX_FORMAT_RGBA16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
++    default: return VK_FORMAT_UNDEFINED;
++  }
++}
++
++NVSDK_NGX_Resource_VK MakeNgxImageResource(ITexture* texture, bool read_write) {
++  const TextureDesc& desc = texture->GetDesc();
++  ITextureView* view =
++      texture->GetDefaultView(read_write ? TEXTURE_VIEW_UNORDERED_ACCESS : TEXTURE_VIEW_SHADER_RESOURCE);
++  RefCntAutoPtr<ITextureVk> texture_vk(texture, IID_TextureVk);
++  RefCntAutoPtr<ITextureViewVk> view_vk(view, IID_TextureViewVk);
++  VkImageSubresourceRange subresource{};
++  subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++  subresource.baseMipLevel = 0;
++  subresource.levelCount = desc.MipLevels ? desc.MipLevels : 1;
++  subresource.baseArrayLayer = 0;
++  subresource.layerCount = desc.ArraySize ? desc.ArraySize : 1;
++  return NVSDK_NGX_Create_ImageView_Resource_VK(
++      view_vk ? view_vk->GetVulkanImageView() : VK_NULL_HANDLE,
++      texture_vk ? texture_vk->GetVkImage() : VK_NULL_HANDLE, subresource, ToVkFormat(desc.Format), desc.Width,
++      desc.Height, read_write);
++}
++#endif
++
++#if NATIVE_X_RENDERER_FSR
+ // The loader's vkGetDeviceProcAddr, with the core function where the device did not enable the extension FidelityFX
+ // asks a function by (as fsr.cpp).
+ PFN_vkGetDeviceProcAddr g_get_device_proc_addr = nullptr;
+@@ -57,8 +140,7 @@ PFN_vkVoidFunction VKAPI_CALL DeviceProcAddr(VkDevice device, const char* name)
+ void Message(uint32_t type, const wchar_t* message) {
+   static std::atomic<uint32_t> count{0};
+   if (count.fetch_add(1) >= 32) return;
+-  std::string text;
+-  for (const wchar_t* c = message; c && *c; ++c) text += *c < 128 ? char(*c) : '?';
++  std::string text = WideToAscii(message);
+   if (type == FFX_API_MESSAGE_TYPE_ERROR) {
+     REXLOG_ERROR("[native_x_renderer] frame generation: {}", text);
+   } else {
+@@ -91,18 +173,114 @@ FfxApiResource Resource(ITexture* texture, uint32_t state, bool unordered_access
+   VkImage image = texture_vk ? texture_vk->GetVkImage() : VK_NULL_HANDLE;
+   return ffxApiGetResourceVK(reinterpret_cast<void*>(image), description, state);
+ }
++#endif
+ 
+ }  // namespace
++
++bool FrameGeneration::ParseProvider(std::string_view value, Provider& out) {
++  if (value.empty() || EqualsIgnoreCase(value, "auto")) {
++    out = Provider::kAuto;
++    return true;
++  }
++  if (EqualsIgnoreCase(value, "nvidia") || EqualsIgnoreCase(value, "dlssg") || EqualsIgnoreCase(value, "dlss")) {
++    out = Provider::kNvidia;
++    return true;
++  }
++  if (EqualsIgnoreCase(value, "amd") || EqualsIgnoreCase(value, "fsr3") || EqualsIgnoreCase(value, "fsr")) {
++    out = Provider::kAmd;
++    return true;
++  }
++  return false;
++}
++
++FrameGeneration::~FrameGeneration() {
++  DestroyContext();
++  ShutdownNvidia();
++}
++
++const char* FrameGeneration::Name() const {
++  switch (active_provider_) {
++    case Provider::kNvidia: return "NVIDIA DLSS-G";
++    case Provider::kAmd: return "AMD FSR 3.1";
++    default: return "off";
++  }
++}
++
++bool FrameGeneration::LoadNvidia() {
++#if NATIVE_X_RENDERER_DLSS
++  if (ngx_params_) return true;
++  RefCntAutoPtr<IRenderDeviceVk> device_vk(device_, IID_RenderDeviceVk);
++  if (!device_vk) return false;
++
++  NVSDK_NGX_Parameter* cap_params = nullptr;
++  NVSDK_NGX_Result cap_result = NVSDK_NGX_VULKAN_GetCapabilityParameters(&cap_params);
++  if (NVSDK_NGX_FAILED(cap_result) || !cap_params) {
++    std::wstring folder = ExecutableFolder();
++    const wchar_t* paths[] = {folder.c_str()};
++    NVSDK_NGX_FeatureCommonInfo common_info{};
++    if (!folder.empty()) {
++      common_info.PathListInfo.Path = paths;
++      common_info.PathListInfo.Length = 1;
++    }
++    NVSDK_NGX_Result init_result = NVSDK_NGX_VULKAN_Init_with_ProjectID(
++        kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "0", L".", device_vk->GetVkInstance(),
++        device_vk->GetVkPhysicalDevice(), device_vk->GetVkDevice(), nullptr, nullptr, &common_info);
++    if (NVSDK_NGX_FAILED(init_result)) {
++      REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA NGX Vulkan init failed ({}: 0x{:08X})",
++                  NarrowNgxResult(init_result), uint32_t(init_result));
++      return false;
++    }
++    ngx_owns_init_ = true;
++    cap_result = NVSDK_NGX_VULKAN_GetCapabilityParameters(&cap_params);
++    if (NVSDK_NGX_FAILED(cap_result) || !cap_params) {
++      REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA NGX GetCapabilityParameters failed ({}: 0x{:08X})",
++                  NarrowNgxResult(cap_result), uint32_t(cap_result));
++      ShutdownNvidia();
++      return false;
++    }
++  }
++
++  int available = 0;
++  NVSDK_NGX_Parameter_GetI(cap_params, NVSDK_NGX_Parameter_FrameGeneration_Available, &available);
++  int feature_init_result = int(NVSDK_NGX_Result_Fail);
++  NVSDK_NGX_Parameter_GetI(cap_params, NVSDK_NGX_Parameter_FrameGeneration_FeatureInitResult, &feature_init_result);
++  int needs_updated_driver = 0;
++  unsigned int min_driver_major = 0, min_driver_minor = 0;
++  NVSDK_NGX_Parameter_GetI(cap_params, NVSDK_NGX_Parameter_FrameGeneration_NeedsUpdatedDriver, &needs_updated_driver);
++  NVSDK_NGX_Parameter_GetUI(cap_params, NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMajor, &min_driver_major);
++  NVSDK_NGX_Parameter_GetUI(cap_params, NVSDK_NGX_Parameter_FrameGeneration_MinDriverVersionMinor, &min_driver_minor);
++  NVSDK_NGX_VULKAN_DestroyParameters(cap_params);
++
++  if (!available) {
++    REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA DLSS-G is not available on this GPU/driver "
++                "(FrameGeneration.Available=0, FeatureInitResult={} [0x{:08X}], needsUpdatedDriver={}, "
++                "minDriver={}.{})",
++                NarrowNgxResult(NVSDK_NGX_Result(feature_init_result)), uint32_t(feature_init_result),
++                needs_updated_driver, min_driver_major, min_driver_minor);
++    ShutdownNvidia();
++    return false;
++  }
++
++  NVSDK_NGX_Parameter* runtime_params = nullptr;
++  NVSDK_NGX_Result alloc_result = NVSDK_NGX_VULKAN_AllocateParameters(&runtime_params);
++  if (NVSDK_NGX_FAILED(alloc_result) || !runtime_params) {
++    REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA NGX AllocateParameters failed ({}: 0x{:08X})",
++                NarrowNgxResult(alloc_result), uint32_t(alloc_result));
++    ShutdownNvidia();
++    return false;
++  }
++  ngx_params_ = runtime_params;
++  return true;
++#else
++  REXLOG_INFO("[native_x_renderer] frame generation: NVIDIA DLSS-G is not in this build");
++  return false;
+ #endif
++}
+ 
+-bool FrameGeneration::Load(IRenderDevice* device) {
+-  device_ = device;
++bool FrameGeneration::LoadAmd() {
+ #if NATIVE_X_RENDERER_FSR
+   if (module_) return true;
+-  wchar_t path[MAX_PATH] = {};
+-  DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+-  std::wstring folder(path, length);
+-  folder.resize(folder.find_last_of(L"\\/") + 1);
++  std::wstring folder = ExecutableFolder();
+   HMODULE module = LoadLibraryW((folder + L"amd_fidelityfx_vk.dll").c_str());
+   if (!module) {
+     REXLOG_WARN("[native_x_renderer] frame generation: amd_fidelityfx_vk.dll is not next to the game's executable");
+@@ -126,11 +304,42 @@ bool FrameGeneration::Load(IRenderDevice* device) {
+   module_ = module;
+   return true;
+ #else
+-  REXLOG_INFO("[native_x_renderer] frame generation: not in this build");
++  REXLOG_INFO("[native_x_renderer] frame generation: AMD FSR 3.1 is not in this build");
+   return false;
+ #endif
+ }
+ 
++bool FrameGeneration::Load(IRenderDevice* device, Provider provider) {
++  device_ = device;
++  requested_provider_ = provider;
++  active_provider_ = Provider::kAuto;
++  logged_version_ = false;
++  if (provider == Provider::kNvidia) {
++    if (LoadNvidia()) {
++      active_provider_ = Provider::kNvidia;
++      return true;
++    }
++    return false;
++  }
++  if (provider == Provider::kAmd) {
++    if (LoadAmd()) {
++      active_provider_ = Provider::kAmd;
++      return true;
++    }
++    return false;
++  }
++  if (LoadNvidia()) {
++    active_provider_ = Provider::kNvidia;
++    return true;
++  }
++  REXLOG_INFO("[native_x_renderer] frame generation: falling back to AMD FidelityFX (provider=auto, D142)");
++  if (LoadAmd()) {
++    active_provider_ = Provider::kAmd;
++    return true;
++  }
++  return false;
++}
++
+ bool FrameGeneration::CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width,
+                                     uint32_t render_height) {
+ #if NATIVE_X_RENDERER_FSR
+@@ -192,20 +401,154 @@ void FrameGeneration::DestroyContext() {
+ #if NATIVE_X_RENDERER_FSR
+   if (!context_) return;
+   // Its textures may still be in use by frames in flight.
+-  device_->IdleGPU();
++  if (device_) device_->IdleGPU();
+   ffxContext context = context_;
+   reinterpret_cast<PfnFfxDestroyContext>(destroy_context_)(&context, nullptr);
+   context_ = nullptr;
+ #endif
+ }
+ 
++bool FrameGeneration::CreateNvidiaFeature(IDeviceContext* context, uint32_t display_width, uint32_t display_height,
++                                          uint32_t render_width, uint32_t render_height, uint32_t vk_format) {
++#if NATIVE_X_RENDERER_DLSS
++  DestroyNvidiaFeature();
++  if (!ngx_params_ || !context) return false;
++  RefCntAutoPtr<IDeviceContextVk> context_vk(context, IID_DeviceContextVk);
++  if (!context_vk) return false;
++
++  auto* params = static_cast<NVSDK_NGX_Parameter*>(ngx_params_);
++  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_InternalWidth, render_width);
++  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_InternalHeight, render_height);
++  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_DynamicResolution, 0u);
++
++  NVSDK_NGX_DLSSG_Create_Params create_params{};
++  create_params.Width = display_width;
++  create_params.Height = display_height;
++  create_params.NativeBackbufferFormat = vk_format;
++  create_params.RenderWidth = render_width;
++  create_params.RenderHeight = render_height;
++  create_params.DynamicResolutionScaling = false;
++
++  NVSDK_NGX_Handle* handle = nullptr;
++  NVSDK_NGX_Result result =
++      NGX_VK_CREATE_DLSSG(context_vk->GetVkCommandBuffer(), 1, 1, &handle, params, &create_params);
++  context->InvalidateState();
++  if (NVSDK_NGX_FAILED(result) || !handle) {
++    REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA DLSS-G feature creation failed for {}x{} -> {}x{} "
++                "({}: 0x{:08X})",
++                render_width, render_height, display_width, display_height, NarrowNgxResult(result), uint32_t(result));
++    return false;
++  }
++  ngx_handle_ = handle;
++  ngx_backbuffer_format_ = vk_format;
++  context_size_[0] = display_width;
++  context_size_[1] = display_height;
++  context_size_[2] = render_width;
++  context_size_[3] = render_height;
++  if (!logged_version_) {
++    logged_version_ = true;
++    REXLOG_INFO("[native_x_renderer] frame generation: NVIDIA DLSS-G frame interpolation, the view {}x{}, the picture "
++                "{}x{} (D142)",
++                render_width, render_height, display_width, display_height);
++  }
++  return true;
++#else
++  (void)context;
++  (void)display_width;
++  (void)display_height;
++  (void)render_width;
++  (void)render_height;
++  (void)vk_format;
++  return false;
++#endif
++}
++
++void FrameGeneration::DestroyNvidiaFeature() {
++#if NATIVE_X_RENDERER_DLSS
++  if (!ngx_handle_) return;
++  if (device_) device_->IdleGPU();
++  NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(ngx_handle_));
++  ngx_handle_ = nullptr;
++  ngx_backbuffer_format_ = 0;
++#endif
++}
++
++void FrameGeneration::ShutdownNvidia() {
++#if NATIVE_X_RENDERER_DLSS
++  DestroyNvidiaFeature();
++  if (ngx_params_) {
++    NVSDK_NGX_VULKAN_DestroyParameters(static_cast<NVSDK_NGX_Parameter*>(ngx_params_));
++    ngx_params_ = nullptr;
++  }
++  if (ngx_owns_init_) {
++    RefCntAutoPtr<IRenderDeviceVk> device_vk(device_, IID_RenderDeviceVk);
++    NVSDK_NGX_VULKAN_Shutdown1(device_vk ? device_vk->GetVkDevice() : VK_NULL_HANDLE);
++    ngx_owns_init_ = false;
++  }
++#endif
++}
++
++bool FrameGeneration::EnsureOutputTexture(uint32_t width, uint32_t height, TEXTURE_FORMAT format) {
++  if (output_ && output_->GetDesc().Width == width && output_->GetDesc().Height == height &&
++      output_->GetDesc().Format == format) {
++    return true;
++  }
++  output_.Release();
++  TextureDesc texture;
++  texture.Name = "NativeXRenderer generated frame";
++  texture.Type = RESOURCE_DIM_TEX_2D;
++  texture.Width = width;
++  texture.Height = height;
++  texture.Format = format;
++  texture.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
++  device_->CreateTexture(texture, nullptr, &output_);
++  output_srv_ = output_ ? output_->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
++  return output_ != nullptr;
++}
++
+ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_t display_width,
+                               uint32_t display_height) {
+   prepared_ = false;
+-#if NATIVE_X_RENDERER_FSR
+-  if (!module_ || !view.depth || !view.motion) return;
++  if (!view.depth || !view.motion || !display_width || !display_height) return;
+   const TextureDesc& depth = view.depth->GetDesc();
+   bool reset = view.reset;
++
++#if NATIVE_X_RENDERER_DLSS
++  if (active_provider_ == Provider::kNvidia) {
++    const uint32_t vk_format = uint32_t(VK_FORMAT_R8G8B8A8_UNORM);
++    if (!ngx_handle_ || context_size_[0] != display_width || context_size_[1] != display_height ||
++        context_size_[2] != depth.Width || context_size_[3] != depth.Height || ngx_backbuffer_format_ != vk_format) {
++      if (!CreateNvidiaFeature(context, display_width, display_height, depth.Width, depth.Height, vk_format)) {
++        if (requested_provider_ == Provider::kAuto) {
++          REXLOG_WARN("[native_x_renderer] frame generation: falling back to AMD FidelityFX after NVIDIA DLSS-G "
++                      "feature creation failed (provider=auto, D142)");
++          ShutdownNvidia();
++          logged_version_ = false;
++          if (LoadAmd()) {
++            active_provider_ = Provider::kAmd;
++          } else {
++            active_provider_ = Provider::kAuto;
++            return;
++          }
++        } else {
++          return;
++        }
++      } else {
++        reset = true;
++        last_generated_ = false;
++      }
++    }
++    if (active_provider_ == Provider::kNvidia) {
++      prepared_view_ = view;
++      prepared_ = true;
++      reset_ = reset;
++      return;
++    }
++  }
++#endif
++
++#if NATIVE_X_RENDERER_FSR
++  if (active_provider_ != Provider::kAmd || !module_) return;
+   if (!context_ || context_size_[0] != display_width || context_size_[1] != display_height ||
+       context_size_[2] != depth.Width || context_size_[3] != depth.Height) {
+     if (!CreateContext(display_width, display_height, depth.Width, depth.Height)) return;
+@@ -258,9 +601,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
+   reset_ = reset;
+ #else
+   (void)context;
+-  (void)view;
+-  (void)display_width;
+-  (void)display_height;
++  (void)reset;
+ #endif
+ }
+ 
+@@ -268,28 +609,141 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+                                const int32_t area[4]) {
+   bool prepared = prepared_;
+   prepared_ = false;
+-#if NATIVE_X_RENDERER_FSR
+   const TextureDesc* desc = current ? &current->GetDesc() : nullptr;
+-  if (!context_ || !prepared || !desc || desc->Width != context_size_[0] || desc->Height != context_size_[1]) {
++
++#if NATIVE_X_RENDERER_DLSS
++  if (active_provider_ == Provider::kNvidia) {
++    if (!ngx_handle_ || !ngx_params_ || !prepared || !desc || desc->Width != context_size_[0] ||
++        desc->Height != context_size_[1] || !prepared_view_.depth || !prepared_view_.motion) {
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++    const uint32_t vk_format = uint32_t(ToVkFormat(desc->Format));
++    if (vk_format == uint32_t(VK_FORMAT_UNDEFINED)) {
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++    if (ngx_backbuffer_format_ != vk_format) {
++      const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
++      if (!CreateNvidiaFeature(context, desc->Width, desc->Height, depth_desc.Width, depth_desc.Height, vk_format)) {
++        last_generated_ = false;
++        ++stats_.skipped;
++        return false;
++      }
++      reset_ = true;
++      last_generated_ = false;
++    }
++    if (!EnsureOutputTexture(desc->Width, desc->Height, desc->Format)) {
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++
++    StateTransitionDesc barriers[] = {
++        {current, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE, STATE_TRANSITION_FLAG_UPDATE_STATE},
++        {prepared_view_.depth, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
++         STATE_TRANSITION_FLAG_UPDATE_STATE},
++        {prepared_view_.motion, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE,
++         STATE_TRANSITION_FLAG_UPDATE_STATE},
++        {output_, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_UNORDERED_ACCESS, STATE_TRANSITION_FLAG_UPDATE_STATE},
++        {hudless, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE, STATE_TRANSITION_FLAG_UPDATE_STATE},
++    };
++    context->TransitionResourceStates(hudless ? 5u : 4u, barriers);
++    RefCntAutoPtr<IDeviceContextVk> context_vk(context, IID_DeviceContextVk);
++    if (!context_vk) {
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++
++    NVSDK_NGX_Resource_VK backbuffer_res = MakeNgxImageResource(current, false);
++    NVSDK_NGX_Resource_VK depth_res = MakeNgxImageResource(prepared_view_.depth, false);
++    NVSDK_NGX_Resource_VK motion_res = MakeNgxImageResource(prepared_view_.motion, false);
++    NVSDK_NGX_Resource_VK hudless_res = hudless ? MakeNgxImageResource(hudless, false) : NVSDK_NGX_Resource_VK{};
++    NVSDK_NGX_Resource_VK output_res = MakeNgxImageResource(output_, true);
++
++    NVSDK_NGX_VK_DLSSG_Eval_Params eval{};
++    eval.pBackbuffer = &backbuffer_res;
++    eval.pDepth = &depth_res;
++    eval.pMVecs = &motion_res;
++    eval.pHudless = hudless ? &hudless_res : nullptr;
++    eval.pOutputInterpFrame = &output_res;
++
++    const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
++    const TextureDesc& motion_desc = prepared_view_.motion->GetDesc();
++    bool reset = reset_ || !last_generated_;
++
++    NVSDK_NGX_DLSSG_Opt_Eval_Params opt{};
++    opt.multiFrameCount = 1;
++    opt.multiFrameIndex = 1;
++    opt.jitterOffset[0] = prepared_view_.jitter_x;
++    opt.jitterOffset[1] = prepared_view_.jitter_y;
++    // Motion vectors in motion_ are in view pixels ((last_uv - uv) * size.xy); DLSS-G normalizes them via mvecScale.
++    opt.mvecScale[0] = motion_desc.Width ? (1.0f / float(motion_desc.Width)) : 1.0f;
++    opt.mvecScale[1] = motion_desc.Height ? (1.0f / float(motion_desc.Height)) : 1.0f;
++    opt.cameraNear = prepared_view_.camera_near;
++    opt.cameraFar = prepared_view_.camera_far;
++    opt.cameraFOV = prepared_view_.fov_y;
++    opt.cameraAspectRatio =
++        depth_desc.Height ? (float(depth_desc.Width) / float(depth_desc.Height)) : (16.0f / 9.0f);
++    opt.colorBuffersHDR = false;
++    opt.depthInverted = false;  // depth_copy_ is 0 at near plane, 1 at far plane
++    opt.cameraMotionIncluded = true;
++    opt.reset = reset;
++
++    uint32_t rect_x = area[0] > 0 ? std::min(uint32_t(area[0]), desc->Width) : 0u;
++    uint32_t rect_y = area[1] > 0 ? std::min(uint32_t(area[1]), desc->Height) : 0u;
++    uint32_t rect_w = area[2] > 0 ? std::min(uint32_t(area[2]), desc->Width - rect_x) : desc->Width - rect_x;
++    uint32_t rect_h = area[3] > 0 ? std::min(uint32_t(area[3]), desc->Height - rect_y) : desc->Height - rect_y;
++    opt.backbufferSubrectBase = {rect_x, rect_y};
++    opt.backbufferSubrectSize = {rect_w, rect_h};
++    if (hudless) {
++      opt.hudLessSubrectBase = {rect_x, rect_y};
++      opt.hudLessSubrectSize = {rect_w, rect_h};
++    }
++    opt.mvecsSubrectBase = {0, 0};
++    opt.mvecsSubrectSize = {motion_desc.Width, motion_desc.Height};
++    opt.depthSubrectBase = {0, 0};
++    opt.depthSubrectSize = {depth_desc.Width, depth_desc.Height};
++
++    NVSDK_NGX_Result result = NGX_VK_EVALUATE_DLSSG(
++        context_vk->GetVkCommandBuffer(), static_cast<NVSDK_NGX_Handle*>(ngx_handle_),
++        static_cast<NVSDK_NGX_Parameter*>(ngx_params_), &eval, &opt);
++    context->InvalidateState();
++    if (NVSDK_NGX_FAILED(result)) {
++      static bool logged = false;
++      if (!logged) {
++        logged = true;
++        REXLOG_ERROR("[native_x_renderer] frame generation: NVIDIA DLSS-G evaluate failed ({}: 0x{:08X})",
++                     NarrowNgxResult(result), uint32_t(result));
++      }
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++    last_generated_ = true;
++    if (reset) {
++      ++stats_.skipped;
++      return false;
++    }
++    ++stats_.generated;
++    return true;
++  }
++#endif
++
++#if NATIVE_X_RENDERER_FSR
++  if (active_provider_ != Provider::kAmd || !context_ || !prepared || !desc || desc->Width != context_size_[0] ||
++      desc->Height != context_size_[1]) {
+     last_generated_ = false;
+     ++stats_.skipped;
+     return false;
+   }
+-  if (!output_ || output_->GetDesc().Width != desc->Width || output_->GetDesc().Height != desc->Height) {
+-    output_.Release();
+-    TextureDesc texture;
+-    texture.Name = "NativeXRenderer generated frame";
+-    texture.Type = RESOURCE_DIM_TEX_2D;
+-    texture.Width = desc->Width;
+-    texture.Height = desc->Height;
+-    texture.Format = TEX_FORMAT_RGBA8_UNORM;
+-    texture.BindFlags = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+-    device_->CreateTexture(texture, nullptr, &output_);
+-    output_srv_ = output_ ? output_->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+-    if (!output_) {
+-      last_generated_ = false;
+-      return false;
+-    }
++  if (!EnsureOutputTexture(desc->Width, desc->Height, TEX_FORMAT_RGBA8_UNORM)) {
++    last_generated_ = false;
++    ++stats_.skipped;
++    return false;
+   }
+   FfxApiRect2D rect{area[0], area[1], area[2], area[3]};
+   ffxConfigureDescFrameGeneration configure{};
+@@ -352,6 +806,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+   (void)hudless;
+   (void)area;
+   (void)prepared;
++  (void)desc;
+   return false;
+ #endif
+ }
+@@ -359,6 +814,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+ void FrameGeneration::EndFrame() {
+   ++frame_id_;
+   prepared_ = false;
++  prepared_view_ = {};
+ }
+ 
+ }  // namespace native_x_renderer
+diff --git a/src/framegen.h b/src/framegen.h
+index ab4bed3..2f2b658 100644
+--- a/src/framegen.h
++++ b/src/framegen.h
+@@ -1,16 +1,15 @@
+-// NativeXRenderer - AMD FidelityFX frame generation (FSR 3.1's frame interpolation) on DiligentCore's Vulkan device
+-// (internal, D123).
++// NativeXRenderer - NVIDIA DLSS-G (NGX Vulkan) and AMD FidelityFX (FSR 3.1) frame generation on DiligentCore's
++// Vulkan device (internal, D123, D142).
+ //
+ // A frame between two of the game's, from the last frame presented and this one, the 3D view's depth and motion
+-// vectors (the temporal upscaler's, D47-D49) and FidelityFX's optical flow for the rest of the picture. FidelityFX's
+-// API is used without its frame interpolation swap chain (FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY): the
+-// frame is generated into a texture of ours, and the renderer presents it and then the game's frame through
+-// DiligentCore's swap chain, with its own present modes (renderer.cpp, ExecutePresent). AMD's amd_fidelityfx_vk.dll
+-// is the one FSR 3.1 loads (fsr.h); the passes are recorded into DiligentCore's command buffer.
++// vectors (the temporal upscaler's, D47-D49), and optical flow / temporal interpolation for the rest of the picture.
++// Both backends run without replacing the swap chain: the interpolated frame is written into a texture of ours, and
++// the renderer presents it and then the game's frame through DiligentCore's swap chain (renderer.cpp, ExecutePresent).
+ 
+ #pragma once
+ 
+ #include <cstdint>
++#include <string_view>
+ 
+ #include "DeviceContext.h"
+ #include "RefCntAutoPtr.hpp"
+@@ -21,8 +20,21 @@ namespace native_x_renderer {
+ 
+ class FrameGeneration {
+  public:
+-  // Loads AMD's library from the executable's folder. False (logged) when it is missing or not in this build.
+-  bool Load(Diligent::IRenderDevice* device);
++  enum class Provider : uint8_t {
++    kAuto,    // NVIDIA DLSS-G when available on the GPU/driver, else AMD FSR 3.1
++    kNvidia,  // NVIDIA DLSS-G (NGX Vulkan)
++    kAmd,     // AMD FSR 3.1 (amd_fidelityfx_vk.dll)
++  };
++
++  static bool ParseProvider(std::string_view value, Provider& out);
++
++  FrameGeneration() = default;
++  ~FrameGeneration();
++
++  // Initializes the requested frame generation backend ("auto" tries NVIDIA DLSS-G first and falls back to AMD FSR 3.1).
++  bool Load(Diligent::IRenderDevice* device, Provider provider = Provider::kAuto);
++  const char* Name() const;
++  Provider active_provider() const { return active_provider_; }
+ 
+   // This frame's 3D view, after the upscale.
+   struct View {
+@@ -33,8 +45,8 @@ class FrameGeneration {
+     float camera_near = 0.1f, camera_far = 1000.0f, fov_y = 1.0f;
+     bool reset = false;  // the view's history starts again (a cut, or no view in the last frame)
+   };
+-  // FidelityFX's prepare pass on the view, into `context`'s command buffer (no render pass open), for a picture of
+-  // `display_width` x `display_height` (the window's).
++  // Prepares this frame's 3D view for frame generation into `context`'s command buffer (no render pass open), for a
++  // picture of `display_width` x `display_height` (the window's).
+   void Prepare(Diligent::IDeviceContext* context, const View& view, uint32_t display_width, uint32_t display_height);
+ 
+   // At Present, the frame composed into `current` (the window's size, RGBA8_UNORM): the frame between the last one
+@@ -60,10 +72,20 @@ class FrameGeneration {
+   }
+ 
+  private:
++  bool LoadNvidia();
++  bool LoadAmd();
+   bool CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width, uint32_t render_height);
+   void DestroyContext();
++  bool CreateNvidiaFeature(Diligent::IDeviceContext* context, uint32_t display_width, uint32_t display_height,
++                           uint32_t render_width, uint32_t render_height, uint32_t vk_format);
++  void DestroyNvidiaFeature();
++  void ShutdownNvidia();
++  bool EnsureOutputTexture(uint32_t width, uint32_t height, Diligent::TEXTURE_FORMAT format);
+ 
+   Diligent::IRenderDevice* device_ = nullptr;
++  Provider requested_provider_ = Provider::kAuto;
++  Provider active_provider_ = Provider::kAuto;
++
+   void* module_ = nullptr;  // amd_fidelityfx_vk.dll (never unloaded)
+   void* create_context_ = nullptr;
+   void* destroy_context_ = nullptr;
+@@ -71,13 +93,20 @@ class FrameGeneration {
+   void* dispatch_ = nullptr;
+   void* query_ = nullptr;
+   void* context_ = nullptr;  // ffxContext
++
++  void* ngx_params_ = nullptr;   // NVSDK_NGX_Parameter*
++  void* ngx_handle_ = nullptr;   // NVSDK_NGX_Handle*
++  bool ngx_owns_init_ = false;   // true when FrameGeneration called NVSDK_NGX_VULKAN_Init_with_ProjectID itself
++  uint32_t ngx_backbuffer_format_ = 0;
++  View prepared_view_{};
++
+   uint32_t context_size_[4] = {};  // display, then the view's
+   bool logged_version_ = false;
+ 
+   uint64_t frame_id_ = 1;
+   bool prepared_ = false;          // this frame's view went through the prepare pass
+   bool reset_ = false;             // and its history starts again
+-  bool last_generated_ = false;    // the last frame's picture was given to Generate (FidelityFX kept it)
++  bool last_generated_ = false;    // the last frame's picture was given to Generate (kept as baseline)
+   Diligent::RefCntAutoPtr<Diligent::ITexture> output_;
+   Diligent::ITextureView* output_srv_ = nullptr;
+   Stats stats_;
+diff --git a/src/renderer.cpp b/src/renderer.cpp
+index 0c26d52..497fd64 100644
+--- a/src/renderer.cpp
++++ b/src/renderer.cpp
+@@ -81,9 +81,13 @@ REXCVAR_DEFINE_STRING(native_x_renderer_views, "", "NativeXRenderer",
+                       "BeginView / EndViewGeometry, D47), auto (found from the draws, up to the profile's "
+                       "upscale_resolve_caller, with the camera vote: D119), or empty for the profile's choice");
+ REXCVAR_DEFINE_BOOL(native_x_renderer_frame_generation, false, "NativeXRenderer",
+-                    "AMD FSR 3.1 frame generation (read at startup, D123): a frame between each two of the game's, "
++                    "Frame generation (read at startup, D123, D142): a frame between each two of the game's, "
+                     "presented before the game's. Needs DLSS or FSR 3.1 (their 3D view and motion vectors) and a game "
+                     "running at half the display's refresh rate; with V-Sync the two are shown a refresh apart");
++REXCVAR_DEFINE_STRING(native_x_renderer_frame_generation_provider, "auto", "NativeXRenderer",
++                      "Frame generation provider (read at startup, D142): \"auto\" (NVIDIA DLSS-G when available on "
++                      "the GPU/driver, else AMD FSR 3.1), \"nvidia\"/\"dlssg\" (NVIDIA DLSS-G via NGX Vulkan), or "
++                      "\"amd\"/\"fsr3\" (AMD FidelityFX FSR 3.1)");
+ REXCVAR_DEFINE_BOOL(native_x_renderer_pipeline_storage, true, "NativeXRenderer",
+                     "Keep the shaders and pipelines used between runs, and prepare them at startup (read at startup)");
+ REXCVAR_DEFINE_BOOL(native_x_renderer_wait_offscreen_pipelines, true, "NativeXRenderer",
+@@ -202,6 +206,17 @@ bool g_auto_view_done = false;
+ // Whether the last frame's view reached the upscale point: only then is this frame's jittered (as King Kong's
+ // renderer does), so that a 3D scene that never gets there (GH Metallica's loading screen) is not shaken.
+ bool g_auto_upscaled_last_frame = false;
++// D139: the 3D view's state, for the log: whether this frame had one, whether its upscale point ran, what was last
++// logged, and the state waiting to persist (half a second) before it is written (a menu whose view alternates writes
++// nothing), from the first view found on, and whether the point ever ran (a profile whose point never fires says so
++// once).
++bool g_frame_view = false;
++bool g_frame_upscaled = false;
++int g_logged_view = 0;  // 0 none, 1 found, 2 upscaled at the point
++int g_pending_view = 0;
++uint32_t g_pending_view_frames = 0;
++uint32_t g_first_view_frame = ~0u;
++bool g_upscale_point_ever = false;
+ // The vote's results since the last stats line: applications with a vote, their offers and the top candidate's votes,
+ // and the difference from the view hook's reprojection where both were there (output pixels).
+ struct {
+@@ -698,7 +713,9 @@ void ExecuteDraw(const Command& c) {
+   if (g_auto_views && g_draw->TakeSceneStarted()) {  // D119: this draw started the main 3D view
+     g_scene_view = scene = true;
+     g_scene_color = g_scene_depth = nullptr;
++    if (g_first_view_frame == ~0u) g_first_view_frame = g_frames_presented;
+   }
++  if (g_scene_view) g_frame_view = true;
+   if (scene && targets[0] && targets[0]->guest_width == g_profile->output_width &&
+       targets[0]->guest_height == g_profile->output_height) {
+     g_scene_color = targets[0];
+@@ -836,12 +853,30 @@ void ExecuteResolve(const Command& c) {
+   GuestSurface surface = Tiled(c.surfaces[0]);
+   // D119: the profile's upscale point, the copy of the finished 3D scene of the output size: DLSS or FSR 3.1 on the
+   // view first, so that the copy takes their image. No view again until the next Present. Before the copy's source is
+-  // chosen: with reduced targets (D121) it is then the upscaled image's, at the render scale.
+-  if (g_auto_views && g_scene_view && c.caller == g_profile->upscale_resolve_caller && surface && !surface.depth &&
+-      surface.width == g_profile->output_width && surface.height == g_profile->output_height) {
++  // chosen: with reduced targets (D121) it is then the upscaled image's, at the render scale. Where the game's copy is
++  // the view's depth (D138), a depth surface is the point.
++  uint32_t point_width = surface ? surface.width : 0, point_height = surface ? surface.height : 0;
++  if (g_auto_views && g_scene_view && c.caller == g_profile->upscale_resolve_caller &&
++      surface && (g_profile->upscale_resolve_depth || !surface.depth) && point_width == g_profile->output_width &&
++      point_height == g_profile->output_height) {
+     UpscaleScene();
+     g_auto_view_done = true;
+     g_auto_reduced = false;
++    g_frame_upscaled = true;
++    g_upscale_point_ever = true;
++  } else if (g_auto_views && g_scene_view && c.caller == g_profile->upscale_resolve_caller) {
++    // D139: a resolve at the profile's point that is not the view's end says why, once: the point never running was
++    // indistinguishable from no 3D view at all (GH World Tour before D138: a depth resolve where D119 expected color).
++    static bool logged = false;
++    if (!logged) {
++      logged = true;
++      REXLOG_WARN("[native_x_renderer] the upscale point 0x{:08x} on a {}x{} {} surface is not the view's end: {}",
++                  c.caller, point_width, point_height, (surface && surface.depth) ? "depth" : "color",
++                  (!surface ? "no surface is bound"
++                            : (point_width != g_profile->output_width || point_height != g_profile->output_height)
++                                  ? "not the game's output size"
++                                  : "a depth surface, and the profile does not set upscale_resolve_depth (D138)"));
++    }
+   }
+   HostTarget* source = TargetFor(surface);
+   // The rectangle the copy reads, then narrowed to what it copied: the clears' rectangle, which they get however
+@@ -1101,6 +1136,10 @@ void ExecuteBeginView(const Command& c) {
+   g_scene_view = c.has_matrix;
+   if (g_scene_view) g_scene_view_projection = c.matrix;
+   g_scene_color = g_scene_depth = nullptr;
++  if (g_scene_view) {
++    g_frame_view = true;
++    if (g_first_view_frame == ~0u) g_first_view_frame = g_frames_presented;
++  }
+ }
+ 
+ // The main 3D view's end: DLSS or FSR 3.1 on its color and depth, before the game's post-processing reads them.
+@@ -1143,6 +1182,11 @@ void UpscaleScene() {
+                                           g_draw ? g_draw->jittered_z_max() : 1.0f, [](ITextureView* motion) {
+                                             if (g_draw) g_draw->DrawObjectMotion(motion, g_scene_depth->view);
+                                           }, voted ? &vote : nullptr);
++    // D141: when the 3D view was drawn at reduced resolution (DLSS Quality/Balanced/Performance, g_reduced), output is
++    // the full render-scale target (Kind::kRender) while g_scene_color is Kind::kReduced. Stamp output->written so
++    // post-processing resolves (including 4x MSAA alias resolves via FindMsaaAlias at D138's depth resolve boundary)
++    // pick the upscaled Kind::kRender target rather than the un-upscaled Kind::kReduced target.
++    if (upscaled && output != g_scene_color) output->written = ++g_target_writes;
+     // Frame generation's inputs (D123), prepared at Present.
+     if (upscaled && g_frame_generation && g_upscaler.frame_inputs().depth) {
+       g_frame_inputs = g_upscaler.frame_inputs();
+@@ -1406,6 +1450,42 @@ void ExecutePresent(const Command& c) {
+   g_view_ended = false;
+   g_auto_view_done = false;
+   g_scene_antialiased = false;
++  // D139: the 3D view's state, written when it has persisted 30 frames (a menu whose view alternates writes nothing;
++  // a song writes one line). An agent verifying a profile greps "3D view: upscaled" for the upscaler on the view, and
++  // "found, but" for a profile whose upscale point never runs.
++  int view = g_frame_upscaled ? 2 : (g_frame_view ? 1 : 0);
++  if (view == g_logged_view) {
++    g_pending_view = view;
++    g_pending_view_frames = 0;
++  } else if (view != g_pending_view) {
++    g_pending_view = view;
++    g_pending_view_frames = 1;
++  } else if (++g_pending_view_frames >= 30) {
++    g_logged_view = view;
++    g_pending_view_frames = 0;
++    if (view == 2) {
++      REXLOG_INFO("[native_x_renderer] 3D view: upscaled at the profile's point 0x{:08x}",
++                  g_profile->upscale_resolve_caller);
++    } else if (view == 1 && g_auto_views) {
++      REXLOG_WARN("[native_x_renderer] 3D view: found, but its upscale point 0x{:08x} did not run this frame",
++                  g_profile->upscale_resolve_caller);
++    } else if (view == 1) {
++      REXLOG_INFO("[native_x_renderer] 3D view: found (no temporal upscaler)");
++    } else {
++      REXLOG_INFO("[native_x_renderer] 3D view: none");
++    }
++  }
++  if (g_auto_views && !g_upscale_point_ever && g_first_view_frame != ~0u &&
++      g_frames_presented > g_first_view_frame + 600) {
++    static bool logged = false;
++    if (!logged) {
++      logged = true;
++      REXLOG_WARN("[native_x_renderer] the profile has set upscale_resolve_caller = 0x{:08x} but its point never ran in "
++                  "600 frames after the first 3D view: DLSS and FSR 3.1 cannot start without it (D119)",
++                  g_profile->upscale_resolve_caller);
++    }
++  }
++  g_frame_view = g_frame_upscaled = false;
+   if (g_temporal) g_upscaler.NextFrame();
+   if (!g_device->UpdateSize()) {
+     // Minimized: the frame drawn but not shown is still ended (D125). Returning without it left every frame's work
+@@ -1828,16 +1908,26 @@ bool Initialize(const Profile& profile, rex::system::IGraphicsSystem* graphics,
+                   : g_camera_vote ? "; the camera's motion from a vote of the main view's draws (D118)"
+                                   : "");
+     }
+-    // Frame generation (D123): the temporal upscaler's view and motion vectors are its inputs.
++    // Frame generation (D123, D142): the temporal upscaler's view and motion vectors are its inputs.
+     if (REXCVAR_GET(native_x_renderer_frame_generation)) {
++      const std::string& fg_provider_name = REXCVAR_GET(native_x_renderer_frame_generation_provider);
++      FrameGeneration::Provider fg_provider = FrameGeneration::Provider::kAuto;
++      if (!FrameGeneration::ParseProvider(fg_provider_name, fg_provider)) {
++        REXLOG_WARN("[native_x_renderer] unknown native_x_renderer_frame_generation_provider \"{}\", using \"auto\" "
++                    "(valid: auto, nvidia/dlssg, amd/fsr3)",
++                    fg_provider_name);
++      }
+       if (!g_temporal) {
+         REXLOG_WARN("[native_x_renderer] frame generation needs DLSS or FSR 3.1 on (their 3D view and motion vectors): "
+                     "off");
+-      } else if (g_framegen.Load(device->device())) {
++      } else if (g_framegen.Load(device->device(), fg_provider)) {
+         g_frame_generation = true;
+         device->ForceVsync(true);
+-        REXLOG_INFO("[native_x_renderer] frame generation: AMD FSR 3.1's, a frame between each two of the game's, with "
+-                    "V-Sync (D123)");
++        REXLOG_INFO("[native_x_renderer] frame generation: {} (requested \"{}\"), a frame between each two of the "
++                    "game's, with V-Sync (D123, D142)",
++                    g_framegen.Name(), fg_provider_name.empty() ? "auto" : fg_provider_name);
++      } else {
++        g_upscaler.SetFrameGenerationInputs(false);
+       }
+     }
+     Antialiasing::Mode mode = Antialiasing::ParseMode(name);
+diff --git a/src/upscaler.cpp b/src/upscaler.cpp
+index ecf10f0..9fe1f56 100644
+--- a/src/upscaler.cpp
++++ b/src/upscaler.cpp
+@@ -60,10 +60,9 @@ void main() {
+ }
+ )";
+ 
+-// FSR 3.1 (D116): the view's depth as R32_FLOAT, FidelityFX's Vulkan backend making its own views of the images it
+-// gets (a depth-stencil image would need its depth aspect). Brought to the projection's z with the view's depth range,
+-// as the motion vectors read it: 0 at the near plane, 1 at the far one, whichever way the game stores it.
+-constexpr const char* kDepthCopyPS = R"(#version 450
++// Combined pass for FSR 3.1 (D116) and frame generation (D123, D140): writes motion vectors and the normalized
++// R32_FLOAT depth copy (0 at the near plane, 1 at the far plane) in a single fullscreen read of depthTex.
++constexpr const char* kMotionAndDepthPS = R"(#version 450
+ layout(set = 0, binding = 0) uniform MotionConstants {
+   mat4 reprojection;
+   vec4 size;
+@@ -71,9 +70,16 @@ layout(set = 0, binding = 0) uniform MotionConstants {
+   vec4 depth_range;
+ };
+ layout(set = 0, binding = 1) uniform sampler2D depthTex;
+-layout(location = 0) out float out_depth;
++layout(location = 0) out vec2 out_motion;
++layout(location = 1) out float out_depth;
+ void main() {
+-  out_depth = (texelFetch(depthTex, ivec2(gl_FragCoord.xy), 0).r - depth_range.x) / (depth_range.y - depth_range.x);
++  ivec2 pixel = ivec2(gl_FragCoord.xy);
++  float depth = (texelFetch(depthTex, pixel, 0).r - depth_range.x) / (depth_range.y - depth_range.x);
++  vec2 uv = (vec2(pixel) + 0.5 - jitter.xy) * size.zw;
++  vec4 last = reprojection * vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
++  vec2 last_uv = vec2(last.x / last.w * 0.5 + 0.5, 0.5 - last.y / last.w * 0.5);
++  out_motion = (last_uv - uv) * size.xy;
++  out_depth = depth;
+ }
+ )";
+ 
+@@ -216,7 +222,8 @@ bool Upscaler::Initialize(IRenderDevice* device, uint32_t output_width, uint32_t
+     return false;
+   }
+ 
+-  // The motion vector pass, and FSR's depth copy: full-screen passes reading the view's depth (point sampled).
++  // The motion vector pass (and combined motion + depth pass for FSR / frame generation): full-screen pass reading
++  // the view's depth (point sampled).
+   BufferDesc constants;
+   constants.Name = "NativeXRenderer motion vector constants";
+   constants.Size = sizeof(MotionConstants);
+@@ -225,15 +232,16 @@ bool Upscaler::Initialize(IRenderDevice* device, uint32_t output_width, uint32_t
+   constants.CPUAccessFlags = CPU_ACCESS_WRITE;
+   device->CreateBuffer(constants, nullptr, &constants_);
+   RefCntAutoPtr<IShader> vs = CreateShader(device, SHADER_TYPE_VERTEX, kMotionVS, "NativeXRenderer motion vectors VS");
+-  RefCntAutoPtr<IShader> ps = CreateShader(device, SHADER_TYPE_PIXEL, kMotionPS, "NativeXRenderer motion vectors PS");
+   auto depth_pass = [&](RefCntAutoPtr<IPipelineState>& pso, RefCntAutoPtr<IShaderResourceBinding>& srb,
+-                        const char* name, IShader* pixel, TEXTURE_FORMAT format) {
++                        const char* name, const char* pixel_source, const char* pixel_name,
++                        const TEXTURE_FORMAT* formats, uint32_t target_count) {
++    RefCntAutoPtr<IShader> pixel = CreateShader(device, SHADER_TYPE_PIXEL, pixel_source, pixel_name);
+     if (!constants_ || !vs || !pixel) return;
+     GraphicsPipelineStateCreateInfo info;
+     info.PSODesc.Name = name;
+     info.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+-    info.GraphicsPipeline.NumRenderTargets = 1;
+-    info.GraphicsPipeline.RTVFormats[0] = format;
++    info.GraphicsPipeline.NumRenderTargets = target_count;
++    for (uint32_t i = 0; i < target_count; ++i) info.GraphicsPipeline.RTVFormats[i] = formats[i];
+     info.GraphicsPipeline.DSVFormat = TEX_FORMAT_UNKNOWN;
+     info.GraphicsPipeline.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+     info.GraphicsPipeline.RasterizerDesc.CullMode = CULL_MODE_NONE;
+@@ -256,17 +264,18 @@ bool Upscaler::Initialize(IRenderDevice* device, uint32_t output_width, uint32_t
+       pso->CreateShaderResourceBinding(&srb, true);
+     }
+   };
+-  depth_pass(motion_pso_, motion_srb_, "NativeXRenderer motion vectors", ps, kMotionFormat);
++  depth_pass(motion_pso_, motion_srb_, "NativeXRenderer motion vectors", kMotionPS,
++             "NativeXRenderer motion vectors PS", &kMotionFormat, 1);
+   if (!motion_srb_) {
+     REXLOG_ERROR("[native_x_renderer] {}: the motion vector pass could not be set up", Name());
+     return false;
+   }
+   if (provider_ == Provider::kFsr || frame_inputs_on_) {
+-    RefCntAutoPtr<IShader> depth_ps =
+-        CreateShader(device, SHADER_TYPE_PIXEL, kDepthCopyPS, "NativeXRenderer FSR depth copy PS");
+-    depth_pass(depth_copy_pso_, depth_copy_srb_, "NativeXRenderer FSR depth copy", depth_ps, TEX_FORMAT_R32_FLOAT);
+-    if (!depth_copy_srb_) {
+-      REXLOG_ERROR("[native_x_renderer] {}: the depth copy pass could not be set up", Name());
++    const TEXTURE_FORMAT formats[2] = {kMotionFormat, TEX_FORMAT_R32_FLOAT};
++    depth_pass(motion_depth_pso_, motion_depth_srb_, "NativeXRenderer motion and depth", kMotionAndDepthPS,
++               "NativeXRenderer motion and depth PS", formats, 2);
++    if (!motion_depth_srb_) {
++      REXLOG_ERROR("[native_x_renderer] {}: the combined motion and depth pass could not be set up", Name());
+       return false;
+     }
+   }
+@@ -472,27 +481,8 @@ bool Upscaler::EnsureResources(ITexture* color, ITexture* depth, ITexture* outpu
+ #endif
+ }
+ 
+-void Upscaler::CopyDepth(IDeviceContext* context, ITextureView* depth_srv) {
+-  // The depth copy reads the motion vector pass's constants (this frame's depth range).
+-  ITextureView* depth_rtv = depth_copy_->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+-  context->SetRenderTargets(1, &depth_rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+-  Viewport viewport;
+-  viewport.Width = float(depth_copy_->GetDesc().Width);
+-  viewport.Height = float(depth_copy_->GetDesc().Height);
+-  viewport.MaxDepth = 1.0f;
+-  context->SetViewports(1, &viewport, 0, 0);
+-  context->SetPipelineState(depth_copy_pso_);
+-  depth_copy_srb_->GetVariableByName(SHADER_TYPE_PIXEL, "depthTex")->Set(depth_srv);
+-  context->CommitShaderResources(depth_copy_srb_, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+-  DrawAttribs draw;
+-  draw.NumVertices = 3;
+-  context->Draw(draw);
+-  context->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+-}
+-
+-bool Upscaler::ApplyFsr(IDeviceContext* context, ITexture* color, ITextureView* depth_srv,
++bool Upscaler::ApplyFsr(IDeviceContext* context, ITexture* color,
+                         const std::array<float, 16>& view_projection, bool reset) {
+-  CopyDepth(context, depth_srv);
+   Fsr::Inputs in;
+   in.color = color;
+   in.depth = depth_copy_;
+@@ -556,6 +546,22 @@ bool Upscaler::Apply(IDeviceContext* context, ITexture* color, ITexture* depth,
+                                                                            output_size_[0], output_size_[1])
+                                                   : -1.0;
+   if (!has_view && !has_vote) reset = true;
++  if (!reset) {
++    // Camera cut / scene jump auto-reset (D140): project clip-space center (0, 0, 0.5, 1) through the column-major
++    // reprojection matrix (`reproj[col * 4 + row]`). Behind-camera w or a large single-frame NDC shift triggers reset.
++    const Mat4d& reproj = has_vote ? from_vote : from_view;
++    const double last_x = reproj[8] * 0.5 + reproj[12];
++    const double last_y = reproj[9] * 0.5 + reproj[13];
++    const double last_w = reproj[11] * 0.5 + reproj[15];
++    if (!std::isfinite(last_x) || !std::isfinite(last_y) || !std::isfinite(last_w) || last_w <= 1e-6) {
++      reset = true;
++    } else {
++      constexpr double kCameraCutNdcThreshold = 0.75;
++      const double ndc_x = last_x / last_w;
++      const double ndc_y = last_y / last_w;
++      if (std::max(std::abs(ndc_x), std::abs(ndc_y)) > kCameraCutNdcThreshold) reset = true;
++    }
++  }
+   for (int i = 0; i < 16; ++i) {
+     constants.reprojection[i] = reset ? (i % 5 == 0 ? 1.0f : 0.0f) : float(has_vote ? from_vote[i] : from_view[i]);
+   }
+@@ -573,16 +579,23 @@ bool Upscaler::Apply(IDeviceContext* context, ITexture* color, ITexture* depth,
+     std::memcpy(data, &constants, sizeof(constants));
+     context->UnmapBuffer(constants_, MAP_WRITE);
+   }
++  const bool copy_depth = (provider_ == Provider::kFsr || frame_inputs_on_) && depth_copy_ && motion_depth_srb_;
+   ITextureView* motion_rtv = motion_->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+-  context->SetRenderTargets(1, &motion_rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
++  ITextureView* rtvs[2] = {
++      motion_rtv,
++      copy_depth ? depth_copy_->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) : nullptr,
++  };
++  context->SetRenderTargets(copy_depth ? 2u : 1u, rtvs, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+   Viewport viewport;
+   viewport.Width = float(desc.Width);
+   viewport.Height = float(desc.Height);
+   viewport.MaxDepth = 1.0f;
+   context->SetViewports(1, &viewport, 0, 0);
+-  context->SetPipelineState(motion_pso_);
+-  motion_srb_->GetVariableByName(SHADER_TYPE_PIXEL, "depthTex")->Set(depth_srv);
+-  context->CommitShaderResources(motion_srb_, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
++  IPipelineState* pso = copy_depth ? motion_depth_pso_.RawPtr() : motion_pso_.RawPtr();
++  IShaderResourceBinding* srb = copy_depth ? motion_depth_srb_.RawPtr() : motion_srb_.RawPtr();
++  context->SetPipelineState(pso);
++  srb->GetVariableByName(SHADER_TYPE_PIXEL, "depthTex")->Set(depth_srv);
++  context->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+   DrawAttribs draw;
+   draw.NumVertices = 3;
+   context->Draw(draw);
+@@ -594,9 +607,8 @@ bool Upscaler::Apply(IDeviceContext* context, ITexture* color, ITexture* depth,
+   bool ok = false;
+   frame_inputs_ = {};
+   if (provider_ == Provider::kFsr) {
+-    ok = ApplyFsr(context, color, depth_srv, view_projection, reset);
++    ok = ApplyFsr(context, color, view_projection, reset);
+   } else {
+-    if (frame_inputs_on_) CopyDepth(context, depth_srv);
+ #if NATIVE_X_RENDERER_DLSS
+   ExecuteSuperResolutionAttribs attribs;
+   attribs.pContext = context;
+diff --git a/src/upscaler.h b/src/upscaler.h
+index b9f4cd9..3af1cb1 100644
+--- a/src/upscaler.h
++++ b/src/upscaler.h
+@@ -126,10 +126,8 @@ class Upscaler {
+   bool EnsureResources(Diligent::ITexture* color, Diligent::ITexture* depth, Diligent::ITexture* output);
+   bool InitializeDlss(uint32_t output_width, uint32_t output_height);
+   bool InitializeFsr(uint32_t output_width, uint32_t output_height);
+-  // The view's depth copied as R32_FLOAT into depth_copy_, 0 at the near plane (FSR 3.1 and frame generation's).
+-  void CopyDepth(Diligent::IDeviceContext* context, Diligent::ITextureView* depth_srv);
+-  // FSR 3.1: the view's depth copied, then the upscale into output_ (D116).
+-  bool ApplyFsr(Diligent::IDeviceContext* context, Diligent::ITexture* color, Diligent::ITextureView* depth_srv,
++  // FSR 3.1: the upscale into output_ using the single-pass motion + R32_FLOAT depth copy (D116, D140).
++  bool ApplyFsr(Diligent::IDeviceContext* context, Diligent::ITexture* color,
+                 const std::array<float, 16>& view_projection, bool reset);
+ 
+   Diligent::IRenderDevice* device_ = nullptr;
+@@ -141,9 +139,9 @@ class Upscaler {
+   Mode mode_ = Mode::kDlaa;
+   Provider provider_ = Provider::kDlss;
+   std::unique_ptr<Fsr> fsr_;
+-  // FSR 3.1 and frame generation: the depth copy pass, into depth_copy_ (R32_FLOAT at the input size).
+-  Diligent::RefCntAutoPtr<Diligent::IPipelineState> depth_copy_pso_;
+-  Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> depth_copy_srb_;
++  // FSR 3.1 and frame generation: motion + R32_FLOAT depth copy pass into motion_ and depth_copy_ (D140).
++  Diligent::RefCntAutoPtr<Diligent::IPipelineState> motion_depth_pso_;
++  Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> motion_depth_srb_;
+   Diligent::RefCntAutoPtr<Diligent::ITexture> depth_copy_;
+   uint8_t optimization_type_ = 0;  // DiligentCore's SUPER_RESOLUTION_OPTIMIZATION_TYPE for the mode
+   uint32_t input_size_[2] = {}, output_size_[2] = {};

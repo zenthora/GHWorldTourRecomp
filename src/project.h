@@ -14,7 +14,7 @@
 
 // The features this recomp does not have (the launcher hides their rows).
 #define GAME_HAS_NATIVE_X_RENDERER true
-#define GAME_FRAME_RATE_CVAR ""
+#define GAME_FRAME_RATE_CVAR "ghworldtour_frame_rate"
 #define GAME_ULTRAWIDE_CVAR ""
 
 // The game's frame: most Xbox 360 games draw 1280x720; check it in a RenderDoc capture or the SDK's
