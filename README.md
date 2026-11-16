@@ -7,9 +7,12 @@ launcher draws it with [NativeXRenderer](https://github.com/ElGuslml/NativeXRend
 fallback and diagnostic path (and the standalone `GHWorldTourRecomp.exe` default unless `--native_x_renderer=true` is
 passed).
 
-The project layout follows [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp), and it uses the same
-[recomp fork of the SDK](https://github.com/ElGuslml/rexglue-sdk) (microphones, profiles, launcher options) and
-[RecompLauncher](https://github.com/ElGuslml/RecompLauncher).
+This is an independent project built on Gustavo Garcia's ([ElGuslml](https://github.com/ElGuslml)) recompilation
+stack — following [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp)'s layout and using his
+[recomp fork of the SDK](https://github.com/ElGuslml/rexglue-sdk) (microphones, profiles, launcher options),
+[NativeXRenderer](https://github.com/ElGuslml/NativeXRenderer), and
+[RecompLauncher](https://github.com/ElGuslml/RecompLauncher) — created because Gustavo noted he had no plans to
+recompile *World Tour* itself (intending to port its songs to *Metallica* instead).
 
 > [!IMPORTANT]
 > You need your own original Xbox 360 copy of *Guitar Hero: World Tour*. This project does not include any of the
