@@ -16,6 +16,15 @@ The project layout follows [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRe
 > game's files: make an image (ISO) of your own disc and extract it into `assets/` (see
 > [`assets/README.md`](assets/README.md)). The game, its code and its assets belong to their respective owners.
 
+## Installing a prebuilt release
+
+Download the latest release from [Releases](https://github.com/zenthora/GHWorldTourRecomp/releases):
+
+- **Installer (`GHWorldTourRecomp-vX.Y.Z-setup.exe`):** installs for your Windows user without administrator rights (preserving `assets/`, `userdata/`, and `.toml` files across upgrades).
+- **Portable archive (`GHWorldTourRecomp-vX.Y.Z-win64.zip`):** extract to a writable folder (not `Program Files`).
+
+Run **`GH World Tour Launcher.exe`**. On first launch it asks for your Xbox 360 ISO, extracts the game into `assets/`, and creates your profile; subsequent updates can be installed directly from the launcher's **Updates** tab.
+
 ## Building
 
 Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build this), the Windows SDK and Python 3.
@@ -82,6 +91,7 @@ and the song-frame hook `0x82131658`.
 | `generated/` | The codegen's C++ output (not tracked; `generated/rexglue.cmake` is). |
 | `src/` | The app (`main.cpp`, `ghworldtour_app.h`), startup/profile glue (`startup.cpp/h`) and shared names (`project.h`). |
 | `launcher/` | This game's launcher profile: `game.h`, `game.cpp` (texts), `palette.h`, `art/background.svg`. |
+| `installer/` | Per-user Inno Setup script (`ghworldtour.iss`) and wizard image generator (`make_images.ps1`). |
 | `recomp_launcher/` | RecompLauncher's code (the launcher itself); keep it clean. |
 | `patches/` | Tracked patches applied by CMake to the SDK, NativeXRenderer, and RecompLauncher. |
 | `tools/` | Scenario runner, address lookup, body-similarity search, `check.ps1`, `menu-map.md`. |

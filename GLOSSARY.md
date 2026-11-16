@@ -99,3 +99,25 @@ _Avoid_: User data, system account
 **Configuration Precedence**:
 The strict override hierarchy from lowest to highest priority: application defaults, base config file, launcher options file, and command-line flags.
 _Avoid_: Settings merge, config order
+
+### Distribution & Updates
+
+**Release Bundle**:
+The staged redistributable directory of compiled executables, runtime DLLs, the shipped Pipeline List, documentation, and third-party licenses, strictly excluding copyrighted game files and local user state.
+_Avoid_: Dist folder, build output
+
+**Portable Archive**:
+The versioned `-win64.zip` package built from a Release Bundle with a single top-level folder so the launcher's in-place updater can unpack and replace files safely.
+_Avoid_: Zip dump, raw archive
+
+**User-Scope Installer**:
+The per-user Inno Setup `-setup.exe` installed under `%LOCALAPPDATA%\Programs\` without administrator rights so runtime caches and self-updates remain writable while preserving `assets/` and `userdata/` across upgrades.
+_Avoid_: System installer, Program Files install
+
+**License Bundle**:
+The `licenses/` directory assembled at packaging time from SDK and submodule license texts matching `THIRD_PARTY_NOTICES.md`.
+_Avoid_: Static vendor dump
+
+**Update Feed**:
+The GitHub Releases API endpoint (`kReleasesApi`) and human-readable releases URL (`kReleasesPage`) polled by the launcher to discover new releases and verify `.sha256` checksums.
+_Avoid_: Auto-update server, patch endpoint

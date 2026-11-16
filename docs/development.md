@@ -234,4 +234,14 @@ command line; this matters because `OnPreSetup` runs after `SetupEnvironment` lo
 Space: assets 6.6 GB, generated code 130 MB, SDK source 1 GB, build output 1 GB, the ISO 6.3 GB. `tools/check.ps1`
 warns below 12 GB free.
 
+## Packaging a release
+
+Releases are packaged locally (because building requires `assets/default.xex`) via `tools/package-release.ps1`, which stages the Release Bundle from `out/build/win-amd64-release/`, copies `res/4156081A.pipelines.list`, expands `res/README.txt`, collects `licenses/` from the SDK and submodules per `THIRD_PARTY_NOTICES.md`, builds the portable `-win64.zip` (single `GHWorldTourRecomp/` root folder with forward-slash entries) and the Inno Setup `-setup.exe` (`installer/ghworldtour.iss`), writes `.sha256` checksums, and can publish to GitHub Releases with `-Publish`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/package-release.ps1
+```
+
+Pass `-RefreshPipelineList` to regenerate `res/4156081A.pipelines.list` from `out/build/win-amd64-release/userdata/cache/native_x_renderer/4156081A.pipelines`, or `-Publish -Draft` to upload the four assets to a draft GitHub release for the version in `res/version.h`.
+
 The project layout follows [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp).

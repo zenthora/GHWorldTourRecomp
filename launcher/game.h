@@ -56,9 +56,10 @@ inline constexpr int kFrameHeight = GAME_FRAME_HEIGHT;
 
 // --- Updates ---
 
-// Empty: no update checks until this project has a public repository and releases.
-inline constexpr const char* kReleasesApi = "";
-inline constexpr const char* kReleasesPage = "";
+inline constexpr const char* kReleasesApi =
+    "https://api.github.com/repos/zenthora/GHWorldTourRecomp/releases?per_page=20";
+inline constexpr const char* kReleasesPage =
+    "https://github.com/zenthora/GHWorldTourRecomp/releases";
 
 // --- The game's own options (empty: the game has no such option, and the launcher no row) ---
 
