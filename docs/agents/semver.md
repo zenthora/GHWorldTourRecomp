@@ -22,7 +22,12 @@ Every commit subject must match Conventional Commits (`<type>[optional (<scope>)
   ```sh
   git-cliff --bumped-version
   ```
-- Generate `CHANGELOG.md`:
+- Sync `res/version.h` and `CHANGELOG.md` for the next release in one step:
+  ```sh
+  python tools/bump_version.py --dry-run
+  python tools/bump_version.py
+  ```
+- Generate `CHANGELOG.md` standalone:
   ```sh
   git-cliff -o CHANGELOG.md
   ```
@@ -33,11 +38,11 @@ Every commit subject must match Conventional Commits (`<type>[optional (<scope>)
 
 ## Versioned files kept in sync
 
-- `res/version.h`: update both `RECOMP_VERSION` (comma-separated 4-tuple, e.g. `0, 1, 0, 0`) and `RECOMP_VERSION_STR` (string literal, e.g. `"0.1.0"`), which are compiled into the game and launcher executables via `res/game.rc` and `res/launcher.rc`.
-- `CHANGELOG.md`: generated via `git-cliff -o CHANGELOG.md` rather than edited by hand.
+- `res/version.h`: updated by `tools/bump_version.py` (`RECOMP_VERSION` 4-tuple, e.g. `0, 1, 0, 0`, and `RECOMP_VERSION_STR` string literal, e.g. `"0.1.0"`), which are compiled into the game and launcher executables via `res/game.rc` and `res/launcher.rc`.
+- `CHANGELOG.md`: generated via `tools/bump_version.py` or `git-cliff -o CHANGELOG.md` rather than edited by hand.
 
 ## Release tagging
 
 1. Run `prek run --all-files` and `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1 -Build`.
-2. Update `res/version.h` and regenerate `CHANGELOG.md` with `git-cliff -o CHANGELOG.md`.
+2. Run `python tools/bump_version.py` (or pass `--version X.Y.Z` to override) to update `res/version.h` and regenerate `CHANGELOG.md`.
 3. Commit the release preparation changes, then tag the commit as `v<MAJOR>.<MINOR>.<PATCH>`.
