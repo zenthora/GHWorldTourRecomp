@@ -16,6 +16,7 @@ assets/*
 *.qs.xen
 *.fsb
 *.fsb.xen
+*.bik.xen
 *.dat.xen
 *.tex.xen
 *.img.xen

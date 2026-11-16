@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""Rank the target game's functions by how closely their instruction bodies match a reference one.
 
-    python tools/find_equivalent.py --reference-dir C:\kilo\ghm-analysis\generated --func sub_82137F18
+    python tools/find_equivalent.py --reference-dir <path-to-ghm-generated> --func sub_82137F18
 
 Used to port a hook from GH Metallica (or another Neversoft recomp) to GHWT: generate the reference
 XEX with the same codegen (tools/menu-map.md, "Reference XEX"), name the reference function, and read

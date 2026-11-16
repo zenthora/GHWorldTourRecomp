@@ -20,7 +20,7 @@
 param(
     [ValidateSet("boot", "quickplay", "song")]
     [string]$Scenario = "boot",
-    [string]$Exe = "C:\kilo\GHWorldTourRecomp\out\build\win-amd64-release\GHWorldTourRecomp.exe",
+    [string]$Exe = "",
     [string]$OutDir = "",
     [int]$TitleWaitSeconds = 205,
     [switch]$NativeXRenderer,
@@ -35,6 +35,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($Exe -eq "") {
+    $Exe = Join-Path (Split-Path -Parent $PSScriptRoot) "out\build\win-amd64-release\GHWorldTourRecomp.exe"
+}
 $workDir = Split-Path -Parent $Exe
 if (-not (Test-Path -LiteralPath $Exe)) { throw "Executable not found: $Exe" }
 if ($OutDir -eq "") {
