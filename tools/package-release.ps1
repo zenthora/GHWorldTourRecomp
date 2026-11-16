@@ -27,6 +27,17 @@ function Resolve-RepoPath([string]$path) {
     return Join-Path $root $path
 }
 
+function Invoke-NativeQuiet([string]$exe, [string[]]$arguments) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $exe @arguments 2>$null
+        return @{ Code = $LASTEXITCODE; Output = ($out | Out-String).Trim() }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Resolve-Version([string]$explicit) {
     if ($explicit) { return $explicit.Trim().TrimStart("v") }
     $versionHeader = Get-Content -LiteralPath (Join-Path $root "res\version.h") -Raw
@@ -292,11 +303,20 @@ if (-not $SkipInstaller) {
 if ($Publish) {
     $gh = Get-Command gh -ErrorAction SilentlyContinue
     if (-not $gh) { throw "GitHub CLI (gh) is required with -Publish" }
+    $repoSlug = "zenthora/GHWorldTourRecomp"
 
     $notesFile = Join-Path $resolvedOut "release-notes-$tag.md"
     $changelog = ""
     if (Get-Command git-cliff -ErrorAction SilentlyContinue) {
-        $changelog = (& git-cliff --config (Join-Path $root "cliff.toml") --current --strip all 2>$null | Out-String).Trim()
+        $cliffRes = Invoke-NativeQuiet "git-cliff" @(
+            "--workdir", $root,
+            "--config", (Join-Path $root "cliff.toml"),
+            "--latest",
+            "--strip", "all"
+        )
+        if ($cliffRes.Code -eq 0 -and $cliffRes.Output) {
+            $changelog = $cliffRes.Output
+        }
     }
     if (-not $changelog) {
         $changelog = "## $tag"
@@ -316,15 +336,25 @@ Run **GH World Tour Launcher.exe**, point it at your Xbox 360 ISO, create a prof
 "@
     [System.IO.File]::WriteAllText($notesFile, $body, [System.Text.UTF8Encoding]::new($false))
 
-    & gh release view $tag 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        & gh release upload $tag @artifacts --clobber
-        if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
-    } else {
-        $args = @("release", "create", $tag) + $artifacts + @("--title", "GHWorldTourRecomp $tag", "--notes-file", $notesFile)
-        if ($Draft) { $args += "--draft" }
-        & gh @args
-        if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+    $existing = Invoke-NativeQuiet $gh.Source @("release", "view", $tag, "--repo", $repoSlug)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($existing.Code -eq 0) {
+            & $gh.Source release upload $tag @artifacts --repo $repoSlug --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+        } else {
+            $ghArgs = @("release", "create", $tag) + $artifacts + @(
+                "--repo", $repoSlug,
+                "--title", "GHWorldTourRecomp $tag",
+                "--notes-file", $notesFile
+            )
+            if ($Draft) { $ghArgs += "--draft" }
+            & $gh.Source @ghArgs
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
     }
     Write-Host "ok   Uploaded $($artifacts.Count) asset(s) to release $tag"
 }
