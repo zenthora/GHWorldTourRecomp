@@ -49,7 +49,7 @@ second, which makes a scenario run readable while it happens.
 
 ## Frame timing
 
-`C:\Program Files\NVIDIA Corporation\FrameViewSDK\bin\PresentMon_x64.exe` needs elevation. Without it
+`PresentMon_x64.exe` (from NVIDIA FrameViewSDK, e.g. `<FrameViewSDK>\bin\PresentMon_x64.exe`) needs elevation. Without it
 the process exits 1 and prints nothing through a pipe, which looks like a silent failure. Run it from an
 elevated terminal (or with `--restart_as_admin`), for example:
 
@@ -72,7 +72,7 @@ audio endpoint 'VG27A (NVIDIA High Definition Audio)': 2 ch, 48000 Hz
 
 ## Reference XEX
 
-GH Metallica's extracted disc is at `C:\Recomp Library\ghmetalrecomp\assets`. To compare a function with
+Point a reference manifest at an extracted GH Metallica disc (`<ghm-assets>`). To compare a function with
 GHWT's:
 
 1. Write a manifest like `ghworldtour_manifest.toml` pointing at that `default.xex` and a temporary

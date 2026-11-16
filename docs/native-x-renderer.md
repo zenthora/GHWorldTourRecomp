@@ -1,15 +1,17 @@
 # NativeXRenderer in GHWorldTourRecomp
 
 The game's D3D library is replaced by [NativeXRenderer](https://github.com/ElGuslml/NativeXRenderer) when
-`native_x_renderer = true`; the SDK's Xenos path stays the default and the fallback. The game side is
-`src/native_x_renderer_ghworldtour.cpp`: one hook per D3D entry point and a `Profile` with the XDK 2.0.7645
-device layout. The library is the `native_x_renderer/` submodule.
+`native_x_renderer = true`. It is the launcher default (`kNativeXRendererDefault = true` in `launcher/game.h`, passed
+via `ghworldtour_options.toml`), while standalone `GHWorldTourRecomp.exe` (`GhworldtourApp` in `src/ghworldtour_app.h`)
+defaults to the SDK's Xenos emulation unless `--native_x_renderer=true` is passed; Xenos remains the fallback and the
+diagnostic trace/observer path. The game side is `src/native_x_renderer_ghworldtour.cpp`: one hook per D3D entry point
+and a `Profile` with the XDK 2.0.7645 device layout. The library is the `native_x_renderer/` submodule.
 
 ## Where the library is
 
 GHWT was built with XDK **2.0.7645**. Its D3D library is linked from **0x821B06F0** (the XGraphics cache
 helpers) to **0x821C4040** (Present); the game engine follows. Each function has the same body as in GH
-Metallica's XDK 2.0.7978 library (the closest public recomp, `C:\Recomp Library\ghmetalrecomp\assets`), so
+Metallica's XDK 2.0.7978 library (the closest public recomp), so
 the entry points were found with `tools/find_equivalent.py` against a reference codegen of that disc and
 checked by reading the generated code. The whole library sits about `0xD300` higher than Metallica's, and
 the current objects (index buffer, render targets, depth, vertex buffers, textures, viewport) another
@@ -19,7 +21,7 @@ buffer, inline draw end) is at Metallica's offsets.
 Reference codegen (not tracked):
 
 ```powershell
-# out/ref-ghm/ghm_manifest.toml points at C:/Recomp Library/ghmetalrecomp/assets/default.xex
+# out/ref-ghm/ghm_manifest.toml points at <ghm-assets>/default.xex
 rexglue codegen out/ref-ghm/ghm_manifest.toml
 python tools/find_equivalent.py --reference-dir out/ref-ghm/generated --func sub_821C1E30 --top 10
 ```
@@ -91,9 +93,10 @@ either; its commit is the same inline store. Every draw in a trace is a `DrawVer
 
 The compiled shaders are in the CHNK-compressed `DATA/COMPRESSED/FXFILES/MaterialLibrary.bin.xen` (World Tour
 keeps only this copy; the uncompressed `DATA/FXFILES/MaterialLibrary.bin.xen` is the material table). The
-profile names the compressed file for the pipeline list. No `4156081A.pipelines.list` is shipped yet, so the
-launcher does not offer "Compiling shaders" (`kHasPipelineList` false in `launcher/game.h`); shaders are
-compiled on first use and cached in `<user data>/cache/native_x_renderer`.
+profile names the compressed file for the pipeline list. `kHasPipelineList = true` in `launcher/game.h` enables the
+launcher's "Compiling shaders" pre-compilation flow when a `4156081A.pipelines.list` file is present, though no
+`.pipelines.list` file is tracked in git (generate one with `--native_x_renderer_make_pipeline_list`; otherwise shaders
+compile on first use and cache in `<user data>/cache/native_x_renderer`).
 
 ## Turning it on and verifying
 

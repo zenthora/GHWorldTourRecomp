@@ -2,7 +2,10 @@
 
 GHWorldTourRecomp is a static recompilation of **Guitar Hero: World Tour** (Xbox 360, 2008) to native Windows, built on
 the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk). The game's PowerPC code is translated to C++ and compiled.
-It is drawn by ReXGlue's emulation of the Xbox 360 GPU, Xenos (derived from [Xenia](https://xenia.jp)).
+The launcher draws it with [NativeXRenderer](https://github.com/ElGuslml/NativeXRenderer) by default
+(`kNativeXRendererDefault = true` in `launcher/game.h`), while standalone `GHWorldTourRecomp.exe` (`GhworldtourApp` in
+`src/ghworldtour_app.h`) defaults to ReXGlue's Xenos emulation (derived from [Xenia](https://xenia.jp)) unless
+`--native_x_renderer=true` is passed.
 
 ## Requirements
 
@@ -16,18 +19,16 @@ It is drawn by ReXGlue's emulation of the Xbox 360 GPU, Xenos (derived from [Xen
 
 ## The SDK
 
-Use the **recomp fork** of the SDK ([ElGuslml/rexglue-sdk](https://github.com/ElGuslml/rexglue-sdk), branch `recomp`):
+Use the **recomp fork** of the SDK ([ElGuslml/rexglue-sdk](https://github.com/ElGuslml/rexglue-sdk), branch `recomp`,
+verified at commit `8feed3a`):
 it adds the microphone emulation, launcher profiles, launcher options and the gamepad/keyboard handling the launcher
 configures, and the graphics changes NativeXRenderer needs. The official SDK builds and runs the game, but its
 `MicDeviceRequest` stub keeps the game polling for a microphone.
 
-Build and install it once:
+Clone the full source tree next to this repository once (building/installing separately is only needed if you also want a standalone `rexglue` CLI install):
 
 ```powershell
 git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp
-cmake --preset win-amd64
-cmake --build --preset win-amd64-release --parallel 8
-cmake --install out/build/win-amd64 --config Release
 ```
 
 On Windows, `git clone` leaves the libmspack symlinks (in `thirdparty/libmspack/cabextract/mspack`) as text stubs; if
@@ -195,10 +196,11 @@ third-party submodules come with it) plus `patches/native_x_renderer-dlssg-and-d
 at configure time. The mapping, the offsets, the scene resolve address and the verification steps
 are in [`native-x-renderer.md`](native-x-renderer.md).
 
-The renderer is the default (`kNativeXRendererDefault = true` in `launcher/game.h`); the Xenos path is the
-fallback, and `--native_x_renderer=false` (or the launcher's renderer row) switches back to it. The trace and
-observer run on the Xenos path: `--native_x_renderer_trace=true --native_x_renderer_observer=true` (F9 dumps a
-frame).
+The renderer is the launcher default (`kNativeXRendererDefault = true` in `launcher/game.h`), while standalone
+`GHWorldTourRecomp.exe` (`src/ghworldtour_app.h`) defaults to `xenos` unless `--native_x_renderer=true` is passed.
+The Xenos path is the fallback, and `--native_x_renderer=false` (or the launcher's renderer row) switches back to it.
+The trace and observer run on the Xenos path: `--native_x_renderer_trace=true --native_x_renderer_observer=true` (F9
+dumps a frame).
 
 ## Checking a change
 

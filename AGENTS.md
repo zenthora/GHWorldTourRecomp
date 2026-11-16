@@ -5,7 +5,7 @@ Static recompilation of Guitar Hero: World Tour (Xbox 360) on the rexglue-sdk `r
 - Build: `tools/build.ps1` (finds the CMake the build tree was configured with). Run, SDK location, launcher: `docs/development.md`.
 - Codegen corrections (missing functions, chunks, hooks): `ghworldtour_functions.toml`; identify an address with `python tools/where.py 0x...`.
 - Runtime checking: `tools/menu-map.md` (intro timing, input, logs, PresentMon) and `tools/scenario.ps1`.
-- Porting a hook from the reference game: GH Metallica's disc is at `C:\Recomp Library\ghmetalrecomp\assets`; `tools/find_equivalent.py` ranks body matches.
+- Porting a hook from the reference game: point a reference manifest at an extracted GH Metallica disc (`<ghm-assets>`); `tools/find_equivalent.py` ranks body matches.
 - NativeXRenderer (the native renderer): `docs/native-x-renderer.md`; the hooks and the device layout are in `src/native_x_renderer_ghworldtour.cpp`, the library is the `native_x_renderer/` submodule plus `patches/native_x_renderer-dlssg-and-depth-upscale.patch` (applied by CMake; edit the patch, keep the submodule at upstream `origin/main`).
 - Guardrails: `tools/check.ps1` and `prek.toml`; `tools/install-hooks.ps1` installs the `prek` hooks.
 - Review rules: `CODING_STANDARDS.md`.
