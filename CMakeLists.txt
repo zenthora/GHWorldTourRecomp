@@ -3,14 +3,23 @@
 #
 # The ReXGlue SDK (the recomp fork, ElGuslml/rexglue-sdk branch recomp) is found in this order:
 #   1. REXSDK_DIR, when set (a rexglue-sdk source tree; CMake builds it with the project).
-#   2. thirdparty/rexglue-sdk, when that submodule is present.
-#   3. GHWORLDTOUR_SDK_INSTALL_DIR, or a sibling checkout's installed SDK
-#      (../rexglue-sdk-recomp/out/install/win-amd64, then ../rexglue-sdk), found with find_package.
+#   2. thirdparty/rexglue-sdk, when present (isolated per-repo SDK checkout).
+#   3. GHWORLDTOUR_SDK_SOURCE_DIR (defaults to ../rexglue-sdk-recomp, a sibling checkout shared
+#      with other projects such as GHMetalRecomp; patched in place at configure time).
 #
 # SDK boilerplate lives in generated/rexglue.cmake.
 
 cmake_minimum_required(VERSION 3.25)
 project(ghworldtour LANGUAGES C CXX)
+
+# Clear inherited git hook variables (GIT_INDEX_FILE, GIT_DIR, etc.) so git commands invoked by
+# CMake, the SDK's version helper, and NativeXRenderer's Diligent patch script inspect each
+# checkout's own repository rather than a parent git hook's index/object store.
+foreach(_ghwt_git_var IN ITEMS GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY)
+    if(DEFINED ENV{${_ghwt_git_var}})
+        unset(ENV{${_ghwt_git_var}})
+    endif()
+endforeach()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,10 +46,15 @@ if(NOT REXSDK_DIR)
             "Path to the rexglue-sdk source tree" FORCE)
     endif()
 endif()
+if(REXSDK_DIR AND NOT IS_ABSOLUTE "${REXSDK_DIR}")
+    get_filename_component(_ghwt_abs_sdk "${REXSDK_DIR}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    set(REXSDK_DIR "${_ghwt_abs_sdk}" CACHE PATH
+        "Path to the rexglue-sdk source tree" FORCE)
+endif()
 if(NOT REXSDK_DIR OR NOT EXISTS "${REXSDK_DIR}/RECOMP.md")
     message(FATAL_ERROR
         "The rexglue-sdk recomp source tree was not found. Clone ElGuslml/rexglue-sdk (branch recomp) "
-        "next to this project as rexglue-sdk-recomp, or set GHWORLDTOUR_SDK_SOURCE_DIR / REXSDK_DIR.")
+        "next to this project as rexglue-sdk-recomp, into thirdparty/rexglue-sdk, or set REXSDK_DIR / GHWORLDTOUR_SDK_SOURCE_DIR.")
 endif()
 message(STATUS "Using the ReXGlue SDK source tree at ${REXSDK_DIR}")
 
@@ -53,23 +67,99 @@ set(REXGLUE_USE_VULKAN ON CACHE BOOL "Enable the Vulkan graphics backend")
 # Apply tracked GHWorldTourRecomp patches to upstream checkouts (the SDK, NativeXRenderer, and
 # RecompLauncher stay on upstream commits; CMake applies each patch once when configuring).
 function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
-    if(EXISTS "${PATCH_FILE}" AND EXISTS "${REPO_DIR}/.git")
-        execute_process(
-            COMMAND git -C "${REPO_DIR}" apply --reverse --check "${PATCH_FILE}"
-            RESULT_VARIABLE GHWT_PATCH_APPLIED OUTPUT_QUIET ERROR_QUIET)
-        if(NOT GHWT_PATCH_APPLIED EQUAL 0)
-            execute_process(
-                COMMAND git -C "${REPO_DIR}" apply "${PATCH_FILE}"
-                RESULT_VARIABLE GHWT_PATCH_RESULT
-                OUTPUT_VARIABLE GHWT_PATCH_OUTPUT ERROR_VARIABLE GHWT_PATCH_ERROR)
-            if(NOT GHWT_PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR
-                    "Could not apply ${PATCH_FILE} to ${REPO_DIR}:\n${GHWT_PATCH_ERROR}")
-            endif()
-            message(STATUS "Applied the GHWT ${LABEL} patch to ${REPO_DIR}")
-        endif()
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PATCH_FILE}")
+    if(NOT EXISTS "${PATCH_FILE}")
+        message(FATAL_ERROR "Missing required patch file: ${PATCH_FILE}")
     endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PATCH_FILE}")
+
+    if(NOT EXISTS "${REPO_DIR}/.git")
+        message(WARNING
+            "${REPO_DIR} is not a git checkout (.git not found); skipping automatic ${LABEL} patch "
+            "verification/application of ${PATCH_FILE}.")
+        return()
+    endif()
+
+    find_package(Git REQUIRED)
+    # Clear git hook env vars so git -C targets REPO_DIR rather than a parent repository's index/object store.
+    set(_git_env
+        "${CMAKE_COMMAND}" -E env
+        --unset=GIT_INDEX_FILE --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_OBJECT_DIRECTORY
+        "${GIT_EXECUTABLE}" -C "${REPO_DIR}")
+
+    execute_process(
+        COMMAND ${_git_env} apply --reverse --check "${PATCH_FILE}"
+        RESULT_VARIABLE GHWT_PATCH_APPLIED OUTPUT_QUIET ERROR_QUIET)
+    if(GHWT_PATCH_APPLIED EQUAL 0)
+        message(STATUS "GHWT ${LABEL} patch already applied to ${REPO_DIR}")
+        return()
+    endif()
+
+    # Record the applied patch inside REPO_DIR's git dir so a tracked .patch update can reverse cleanly.
+    execute_process(
+        COMMAND ${_git_env} rev-parse --git-dir
+        OUTPUT_VARIABLE _repo_git_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _git_dir_res
+        ERROR_QUIET)
+    set(_applied_stamp "")
+    if(_git_dir_res EQUAL 0 AND NOT _repo_git_dir STREQUAL "")
+        get_filename_component(_repo_git_dir "${_repo_git_dir}" ABSOLUTE BASE_DIR "${REPO_DIR}")
+        string(REGEX REPLACE "[^A-Za-z0-9_.-]+" "-" _label_slug "${LABEL}")
+        set(_applied_stamp "${_repo_git_dir}/ghwt-applied-${_label_slug}.patch")
+    endif()
+
+    if(_applied_stamp AND EXISTS "${_applied_stamp}")
+        execute_process(
+            COMMAND ${_git_env} apply --reverse --check "${_applied_stamp}"
+            RESULT_VARIABLE _old_reverses OUTPUT_QUIET ERROR_QUIET)
+        if(_old_reverses EQUAL 0)
+            execute_process(
+                COMMAND ${_git_env} apply --reverse "${_applied_stamp}"
+                RESULT_VARIABLE _reverse_res
+                OUTPUT_VARIABLE _reverse_out ERROR_VARIABLE _reverse_err)
+            if(NOT _reverse_res EQUAL 0)
+                message(FATAL_ERROR
+                    "Failed to reverse previously applied GHWT ${LABEL} patch in ${REPO_DIR}:\n${_reverse_err}\n"
+                    "Inspect local changes and reset before re-configuring:\n"
+                    "  git -C \"${REPO_DIR}\" diff\n"
+                    "  git -C \"${REPO_DIR}\" checkout -- .")
+            endif()
+            file(REMOVE "${_applied_stamp}")
+            message(STATUS "Removed previous GHWT ${LABEL} patch from ${REPO_DIR} before re-applying")
+        endif()
+    endif()
+
+    execute_process(
+        COMMAND ${_git_env} apply "${PATCH_FILE}"
+        RESULT_VARIABLE GHWT_PATCH_RESULT
+        OUTPUT_VARIABLE GHWT_PATCH_OUTPUT ERROR_VARIABLE GHWT_PATCH_ERROR)
+    if(NOT GHWT_PATCH_RESULT EQUAL 0)
+        execute_process(
+            COMMAND ${_git_env} status --porcelain --untracked-files=no --ignore-submodules=all
+            OUTPUT_VARIABLE _repo_status
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(NOT _repo_status STREQUAL "")
+            message(FATAL_ERROR
+                "Could not apply ${PATCH_FILE} (${LABEL}) to ${REPO_DIR} because the checkout already "
+                "has local modifications (such as an older patch or edits from another project):\n"
+                "${GHWT_PATCH_ERROR}\n"
+                "Inspect the current diff, then reset ${REPO_DIR} and configure again:\n"
+                "  git -C \"${REPO_DIR}\" diff\n"
+                "  git -C \"${REPO_DIR}\" checkout -- .")
+        else()
+            message(FATAL_ERROR
+                "Could not apply ${PATCH_FILE} (${LABEL}) to clean checkout ${REPO_DIR}:\n"
+                "${GHWT_PATCH_ERROR}\n"
+                "Ensure ${REPO_DIR} is on the expected upstream commit "
+                "(for submodules: git submodule update --init --recursive).")
+        endif()
+    endif()
+
+    if(_applied_stamp)
+        file(COPY_FILE "${PATCH_FILE}" "${_applied_stamp}")
+    endif()
+    message(STATUS "Applied the GHWT ${LABEL} patch to ${REPO_DIR}")
 endfunction()
 
 ghwt_apply_git_patch(
@@ -178,9 +268,11 @@ set(RECOMP_LAUNCHER_SDK_DIR "" CACHE PATH
     "The rexglue-sdk tree the launcher takes Dear ImGui, SDL3 and toml++ from")
 if(NOT RECOMP_LAUNCHER_SDK_DIR)
     foreach(candidate
-            "${CMAKE_CURRENT_SOURCE_DIR}/../rexglue-sdk-recomp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk")
-        if(EXISTS "${candidate}/thirdparty/imgui/imgui.cpp")
+            "${REXSDK_DIR}"
+            "${GHWORLDTOUR_SDK_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../rexglue-sdk-recomp")
+        if(candidate AND EXISTS "${candidate}/thirdparty/imgui/imgui.cpp")
             set(RECOMP_LAUNCHER_SDK_DIR "${candidate}" CACHE PATH
                 "The rexglue-sdk tree the launcher takes Dear ImGui, SDL3 and toml++ from" FORCE)
             break()

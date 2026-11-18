@@ -17,7 +17,46 @@ $failures = New-Object System.Collections.Generic.List[string]
 function Pass([string]$message) { Write-Host "ok   $message" -ForegroundColor Green }
 function Fail([string]$message) { $script:failures.Add($message); Write-Host "FAIL $message" -ForegroundColor Red }
 
-# 1. Tracked patches: recomp_launcher and rexglue-sdk-recomp must have GHWorldTourRecomp's patches applied.
+# A pre-commit hook inherits git's index and object environment (GIT_INDEX_FILE, GIT_DIR), which
+# would make git -C read this repository's index as a submodule/sibling checkout's.
+function Invoke-WithCleanGitEnv([scriptblock]$Action) {
+    $saved = @{}
+    foreach ($name in "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY") {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        # Removed, not set to empty: an empty GIT_INDEX_FILE reads as an index with no entries.
+        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+    }
+    try {
+        & $Action
+    } finally {
+        foreach ($name in $saved.Keys) {
+            if ($null -ne $saved[$name]) {
+                [Environment]::SetEnvironmentVariable($name, $saved[$name])
+            }
+        }
+    }
+}
+
+function Resolve-SdkCheckout {
+    $cache = Join-Path $root "out\build\win-amd64-release\CMakeCache.txt"
+    if (Test-Path -LiteralPath $cache) {
+        $match = Select-String -LiteralPath $cache -Pattern '^REXSDK_DIR:PATH=(.+)$' | Select-Object -First 1
+        if ($match) {
+            $cached = $match.Matches[0].Groups[1].Value.Trim()
+            if ($cached -and (Test-Path -LiteralPath $cached)) { return $cached }
+        }
+    }
+    if ($env:REXSDK_DIR -and (Test-Path -LiteralPath $env:REXSDK_DIR)) {
+        return $env:REXSDK_DIR
+    }
+    $localSdk = Join-Path $root "thirdparty\rexglue-sdk"
+    if (Test-Path -LiteralPath (Join-Path $localSdk "CMakeLists.txt")) {
+        return $localSdk
+    }
+    return (Join-Path $root "..\rexglue-sdk-recomp")
+}
+
+# 1. Tracked patches: recomp_launcher and the active rexglue-sdk checkout must have GHWorldTourRecomp's patches applied.
 $patch = Join-Path $root "patches\recomp_launcher-3.14.0-game-defaults.patch"
 $launcher = Join-Path $root "recomp_launcher"
 if (-not (Test-Path -LiteralPath $patch)) {
@@ -25,7 +64,7 @@ if (-not (Test-Path -LiteralPath $patch)) {
 } elseif (-not (Test-Path -LiteralPath (Join-Path $launcher ".git"))) {
     Fail "recomp_launcher is not a git checkout; clone it (README step 2)"
 } else {
-    & git -C $launcher apply --reverse --check $patch 2>$null
+    Invoke-WithCleanGitEnv { & git -C $launcher apply --reverse --check $patch 2>$null }
     if ($LASTEXITCODE -eq 0) {
         Pass "recomp_launcher has the game-defaults patch"
     } else {
@@ -34,15 +73,15 @@ if (-not (Test-Path -LiteralPath $patch)) {
 }
 
 $sdkPatch = Join-Path $root "patches\rexglue-sdk-set-remap-gate.patch"
-$sdkDir = Join-Path $root "..\rexglue-sdk-recomp"
+$sdkDir = Resolve-SdkCheckout
 if (-not (Test-Path -LiteralPath $sdkPatch)) {
     Fail "missing $sdkPatch"
 } elseif (Test-Path -LiteralPath (Join-Path $sdkDir ".git")) {
-    & git -C $sdkDir apply --reverse --check $sdkPatch 2>$null
+    Invoke-WithCleanGitEnv { & git -C $sdkDir apply --reverse --check $sdkPatch 2>$null }
     if ($LASTEXITCODE -eq 0) {
-        Pass "rexglue-sdk-recomp has the SetRemapGate patch"
+        Pass "SDK checkout ($sdkDir) has the SetRemapGate patch"
     } else {
-        Fail "rexglue-sdk-recomp is missing patches/rexglue-sdk-set-remap-gate.patch; run cmake --preset win-amd64-release"
+        Fail "SDK checkout ($sdkDir) is missing patches/rexglue-sdk-set-remap-gate.patch; run cmake --preset win-amd64-release"
     }
 }
 
@@ -88,35 +127,25 @@ $submodule = Join-Path $root "native_x_renderer"
 if (-not (Test-Path -LiteralPath $nxrPatch)) {
     Fail "missing $nxrPatch"
 } elseif (Test-Path -LiteralPath (Join-Path $submodule ".git")) {
-    # A pre-commit hook inherits git's index and object environment (GIT_INDEX_FILE, GIT_DIR), which
-    # would make git -C read this repository's index as the submodule's: every submodule file would
-    # look deleted. Ask the submodule for its own repository instead.
-    $saved_git_env = @{}
-    foreach ($name in "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY") {
-        $saved_git_env[$name] = [Environment]::GetEnvironmentVariable($name)
-        # Removed, not set to empty: an empty GIT_INDEX_FILE reads as an index with no entries.
-        Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
-    }
-    try {
+    $patchOk = $false
+    $ahead = @()
+    $untracked = @()
+    $diffLines = @()
+    $diffOk = $false
+    $patchLines = @()
+    Invoke-WithCleanGitEnv {
         & git -C $submodule apply --reverse --check $nxrPatch 2>$null
-        $patchOk = ($LASTEXITCODE -eq 0)
+        $script:patchOk = ($LASTEXITCODE -eq 0)
 
-        $ahead = @()
         & git -C $submodule rev-parse --verify origin/main 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            $ahead = @(& git -C $submodule rev-list origin/main..HEAD 2>$null)
+            $script:ahead = @(& git -C $submodule rev-list origin/main..HEAD 2>$null)
         }
 
-        $untracked = @(& git -C $submodule ls-files --others --exclude-standard -- . ':(exclude)thirdparty' 2>$null)
-        $diffLines = @(& git -C $submodule diff -- . ':(exclude)thirdparty' 2>$null)
-        $diffOk = ($LASTEXITCODE -eq 0)
-        $patchLines = @(Get-Content -LiteralPath $nxrPatch)
-    } finally {
-        foreach ($name in $saved_git_env.Keys) {
-            if ($null -ne $saved_git_env[$name]) {
-                [Environment]::SetEnvironmentVariable($name, $saved_git_env[$name])
-            }
-        }
+        $script:untracked = @(& git -C $submodule ls-files --others --exclude-standard -- . ':(exclude)thirdparty' 2>$null)
+        $script:diffLines = @(& git -C $submodule diff -- . ':(exclude)thirdparty' 2>$null)
+        $script:diffOk = ($LASTEXITCODE -eq 0)
+        $script:patchLines = @(Get-Content -LiteralPath $nxrPatch)
     }
     if (-not $diffOk) {
         Fail "git diff failed in native_x_renderer"

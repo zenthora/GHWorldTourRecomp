@@ -40,9 +40,18 @@ Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build thi
 
    `GHWorldTourRecomp` builds the SDK directly from this full source tree (an installed `cmake --install` package alone
    is not sufficient because `NativeXRenderer` compiles the SDK's graphics sources in process and links its `glslang`
-   and `xxHash` targets, and CMake applies `patches/rexglue-sdk-set-remap-gate.patch` on configure). Running
+   and `xxHash` targets). Running
    `cmake --preset win-amd64 && cmake --build --preset win-amd64-release --parallel 8 && cmake --install out/build/win-amd64 --config Release`
    inside `../rexglue-sdk-recomp` is only needed if you also want a standalone `rexglue` CLI install.
+
+   > [!NOTE]
+   > Configuring CMake applies `patches/rexglue-sdk-set-remap-gate.patch` **in place** to whichever SDK checkout is
+   > selected, leaving `../rexglue-sdk-recomp` with uncommitted git changes. If you also build `GHMetalRecomp` (or
+   > another project) against `../rexglue-sdk-recomp` and want to keep that shared sibling checkout clean, isolate
+   > `GHWorldTourRecomp`'s SDK checkout in one of two ways:
+   > - Clone into `thirdparty/rexglue-sdk` inside this repository (discovered automatically before
+   >   `../rexglue-sdk-recomp`), or
+   > - Clone anywhere else and pass `-DREXSDK_DIR=<path>` to `cmake --preset win-amd64-release`.
 
 2. Get the launcher and renderer submodules (`recomp_launcher/` and `native_x_renderer/`):
 
@@ -58,9 +67,10 @@ Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build thi
    ```
 
 The first build translates `assets/default.xex` into C++ (`generated/`) and takes a while. If it stops with
-"precompiled header ... has been modified", run the build command again. The SDK source tree is found through
-`REXSDK_DIR` (or `thirdparty/rexglue-sdk`, otherwise the sibling `../rexglue-sdk-recomp` via
-`GHWORLDTOUR_SDK_SOURCE_DIR`); the launcher's headers and Dear ImGui come from `RECOMP_LAUNCHER_SDK_DIR`.
+"precompiled header ... has been modified", run the build command again. Re-running `cmake --preset` is idempotent:
+each tracked patch in `patches/` is checked with `git apply --reverse --check` and skipped when already applied. The
+SDK source tree is found in order: `REXSDK_DIR`, `thirdparty/rexglue-sdk`, then `GHWORLDTOUR_SDK_SOURCE_DIR`
+(defaulting to `../rexglue-sdk-recomp`); `RECOMP_LAUNCHER_SDK_DIR` defaults to the same tree.
 
 ## Running
 
