@@ -34,7 +34,7 @@ index 5d11237..74d3538 100644
      add_custom_command(TARGET ${target} POST_BUILD
                         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NATIVE_X_RENDERER_FFX_DLL}"
 diff --git a/docs/decisions.md b/docs/decisions.md
-index 7a4acdd..1e5a6d8 100644
+index 7a4acdd..0c1a8c4 100644
 --- a/docs/decisions.md
 +++ b/docs/decisions.md
 @@ -6,6 +6,21 @@ end, and do not rewrite old ones. If a decision changes, add a new entry that su
@@ -47,9 +47,9 @@ index 7a4acdd..1e5a6d8 100644
 +
 +- **Architecture, bring-up, phases:** D1–D31.
 +- **Render scale, antialiasing, aspect:** D37–D44, D50.
-+- **Upscaling (DLSS, FSR 3.1, DLAA, the modes):** D46–D49, D53, D116–D122.
-+- **The main 3D view and its upscale point:** D118–D121, D138–D139.
-+- **Frame generation:** D123–D124.
++- **Upscaling (DLSS, FSR 3.1, DLAA, the modes):** D46–D49, D53, D116–D122, D140.
++- **The main 3D view and its upscale point:** D118–D121, D138–D139, D141.
++- **Frame generation:** D123–D124, D142.
 +- **Reduced copies of the screen:** D127–D128.
 +- **Resolves, tiling, MSAA and depth aliases:** D60, D64–D65, D80, D95, D112–D113.
 +- **Pipelines and the pipeline list:** D129–D136.
@@ -59,7 +59,7 @@ index 7a4acdd..1e5a6d8 100644
  ---
  
  ## D1 — Replace the D3D layer, not the GPU (2026-10-13)
-@@ -4787,3 +4802,163 @@ condition variable costs microseconds more than the spin).
+@@ -4787,3 +4802,164 @@ condition variable costs microseconds more than the spin).
  - The Xenos path keeps the 2 bits.
  
  **Revisit if:** a game reads a `2_10_10_10_FLOAT` copy's alpha as a mask that expects the format's 4 steps.
@@ -102,6 +102,7 @@ index 7a4acdd..1e5a6d8 100644
 +
 +**Revisit if:** GHWT is found to draw into its 1280x720 target after the depth resolve but inside the view (a decal pass,
 +a second scene layer), or if another game shows the same "no output-sized color copy" shape.
++
 +## D139 — The 3D view's state in the log, and why an upscale point did not run (2026-11-10)
 +
 +**Decision:**
@@ -577,7 +578,7 @@ index 45130c2..9aa7da5 100644
    // 1.4 KB, plus the float constants its shaders use), with several frames in flight.
    create_info.DynamicHeapSize = 256 << 20;
 diff --git a/src/framegen.cpp b/src/framegen.cpp
-index f609c68..d47b777 100644
+index f609c68..45c637f 100644
 --- a/src/framegen.cpp
 +++ b/src/framegen.cpp
 @@ -6,21 +6,29 @@
@@ -876,7 +877,7 @@ index f609c68..d47b777 100644
  bool FrameGeneration::CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width,
                                      uint32_t render_height) {
  #if NATIVE_X_RENDERER_FSR
-@@ -192,20 +401,154 @@ void FrameGeneration::DestroyContext() {
+@@ -192,20 +401,158 @@ void FrameGeneration::DestroyContext() {
  #if NATIVE_X_RENDERER_FSR
    if (!context_) return;
    // Its textures may still be in use by frames in flight.
@@ -968,6 +969,23 @@ index f609c68..d47b777 100644
 +#endif
 +}
 +
++bool FrameGeneration::FallbackAfterNvidiaFailure() {
++#if NATIVE_X_RENDERER_DLSS
++  ShutdownNvidia();
++  logged_version_ = false;
++  if (requested_provider_ == Provider::kAuto) {
++    REXLOG_WARN("[native_x_renderer] frame generation: falling back to AMD FidelityFX after NVIDIA DLSS-G "
++                "feature creation failed (provider=auto, D142)");
++    if (LoadAmd()) {
++      active_provider_ = Provider::kAmd;
++      return true;
++    }
++  }
++  active_provider_ = Provider::kAuto;
++#endif
++  return false;
++}
++
 +bool FrameGeneration::EnsureOutputTexture(uint32_t width, uint32_t height, TEXTURE_FORMAT format) {
 +  if (output_ && output_->GetDesc().Width == width && output_->GetDesc().Height == height &&
 +      output_->GetDesc().Format == format) {
@@ -1001,20 +1019,7 @@ index f609c68..d47b777 100644
 +    if (!ngx_handle_ || context_size_[0] != display_width || context_size_[1] != display_height ||
 +        context_size_[2] != depth.Width || context_size_[3] != depth.Height || ngx_backbuffer_format_ != vk_format) {
 +      if (!CreateNvidiaFeature(context, display_width, display_height, depth.Width, depth.Height, vk_format)) {
-+        if (requested_provider_ == Provider::kAuto) {
-+          REXLOG_WARN("[native_x_renderer] frame generation: falling back to AMD FidelityFX after NVIDIA DLSS-G "
-+                      "feature creation failed (provider=auto, D142)");
-+          ShutdownNvidia();
-+          logged_version_ = false;
-+          if (LoadAmd()) {
-+            active_provider_ = Provider::kAmd;
-+          } else {
-+            active_provider_ = Provider::kAuto;
-+            return;
-+          }
-+        } else {
-+          return;
-+        }
++        if (!FallbackAfterNvidiaFailure()) return;
 +      } else {
 +        reset = true;
 +        last_generated_ = false;
@@ -1034,7 +1039,7 @@ index f609c68..d47b777 100644
    if (!context_ || context_size_[0] != display_width || context_size_[1] != display_height ||
        context_size_[2] != depth.Width || context_size_[3] != depth.Height) {
      if (!CreateContext(display_width, display_height, depth.Width, depth.Height)) return;
-@@ -258,9 +601,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
+@@ -258,9 +605,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
    reset_ = reset;
  #else
    (void)context;
@@ -1045,7 +1050,7 @@ index f609c68..d47b777 100644
  #endif
  }
  
-@@ -268,28 +609,141 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -268,28 +613,142 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
                                 const int32_t area[4]) {
    bool prepared = prepared_;
    prepared_ = false;
@@ -1070,6 +1075,7 @@ index f609c68..d47b777 100644
 +    if (ngx_backbuffer_format_ != vk_format) {
 +      const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
 +      if (!CreateNvidiaFeature(context, desc->Width, desc->Height, depth_desc.Width, depth_desc.Height, vk_format)) {
++        FallbackAfterNvidiaFailure();
 +        last_generated_ = false;
 +        ++stats_.skipped;
 +        return false;
@@ -1204,7 +1210,7 @@ index f609c68..d47b777 100644
    }
    FfxApiRect2D rect{area[0], area[1], area[2], area[3]};
    ffxConfigureDescFrameGeneration configure{};
-@@ -352,6 +806,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -352,6 +811,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
    (void)hudless;
    (void)area;
    (void)prepared;
@@ -1212,7 +1218,7 @@ index f609c68..d47b777 100644
    return false;
  #endif
  }
-@@ -359,6 +814,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -359,6 +819,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
  void FrameGeneration::EndFrame() {
    ++frame_id_;
    prepared_ = false;
@@ -1221,7 +1227,7 @@ index f609c68..d47b777 100644
  
  }  // namespace native_x_renderer
 diff --git a/src/framegen.h b/src/framegen.h
-index ab4bed3..2f2b658 100644
+index ab4bed3..68ff446 100644
 --- a/src/framegen.h
 +++ b/src/framegen.h
 @@ -1,16 +1,15 @@
@@ -1282,7 +1288,7 @@ index ab4bed3..2f2b658 100644
    void Prepare(Diligent::IDeviceContext* context, const View& view, uint32_t display_width, uint32_t display_height);
  
    // At Present, the frame composed into `current` (the window's size, RGBA8_UNORM): the frame between the last one
-@@ -60,10 +72,20 @@ class FrameGeneration {
+@@ -60,10 +72,21 @@ class FrameGeneration {
    }
  
   private:
@@ -1294,6 +1300,7 @@ index ab4bed3..2f2b658 100644
 +                           uint32_t render_width, uint32_t render_height, uint32_t vk_format);
 +  void DestroyNvidiaFeature();
 +  void ShutdownNvidia();
++  bool FallbackAfterNvidiaFailure();
 +  bool EnsureOutputTexture(uint32_t width, uint32_t height, Diligent::TEXTURE_FORMAT format);
  
    Diligent::IRenderDevice* device_ = nullptr;
@@ -1303,7 +1310,7 @@ index ab4bed3..2f2b658 100644
    void* module_ = nullptr;  // amd_fidelityfx_vk.dll (never unloaded)
    void* create_context_ = nullptr;
    void* destroy_context_ = nullptr;
-@@ -71,13 +93,20 @@ class FrameGeneration {
+@@ -71,13 +94,20 @@ class FrameGeneration {
    void* dispatch_ = nullptr;
    void* query_ = nullptr;
    void* context_ = nullptr;  // ffxContext
