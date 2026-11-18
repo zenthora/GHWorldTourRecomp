@@ -196,6 +196,16 @@ $runtimeFiles = @(
 foreach ($name in $runtimeFiles) {
     Copy-RequiredFile (Join-Path $resolvedBuild $name) (Join-Path $stageDir $name)
 }
+# Copy nvngx_dlssg.dll when bundled via DLSS_BIN_DIR; otherwise NGX loads DLSS-G from the driver store.
+$optionalRuntimeFiles = @(
+    "nvngx_dlssg.dll"
+)
+foreach ($name in $optionalRuntimeFiles) {
+    $optionalSrc = Join-Path $resolvedBuild $name
+    if (Test-Path -LiteralPath $optionalSrc -PathType Leaf) {
+        Copy-Item -LiteralPath $optionalSrc -Destination (Join-Path $stageDir $name) -Force
+    }
+}
 
 # 2. Shipped pipeline list.
 Copy-RequiredFile (Join-Path $root "res\4156081A.pipelines.list") (Join-Path $stageDir "4156081A.pipelines.list")
