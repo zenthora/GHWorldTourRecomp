@@ -83,18 +83,17 @@ SDK source tree is found in order: `REXSDK_DIR`, `thirdparty/rexglue-sdk`, then 
 - `GHWorldTourRecomp.exe` runs the game directly. Game files are found in `assets\` next to the executable, otherwise
   in the repository's `assets\`; `--game_data_root=<folder>` points somewhere else. Logs go to `logs\`.
 
-**Status:** the disc (title ID `4156081A`, 10,301,440-byte `default.xex`) codegens, the intro cards and videos play,
-the launcher starts the game, and a plain controller is reported to the game as a guitar (XInput subtype 6), so the
-"you must use a Guitar Controller" warning does not appear. The music is coherent from the title screen on: by default
-FMOD mixes inline on the SDK's audio worker (`ghworldtour_fmod_on_audio_thread = true`,
-`audio_callback_min_interval_us = 0`; passing `--ghworldtour_fmod_on_audio_thread=false` restores
-`audio_callback_min_interval_us = 3000`) and runs the audio threads with Pro Audio priority. Quick Play opens its setlist and starts (up to the video calibration screen). The launcher's
-**Strum with the frets** switch is on by default (GHWT has no auto-strum) and the game gates it to songs through the
-`sub_82131658` song-frame hook. V-Sync defaults off: GHWT is 60 FPS only, and on a 144/165 Hz display it adds present
-queue latency. The corrections the analyzer needed are in `ghworldtour_functions.toml`: seven branch targets, the
-alternate entry point `0x82213E60` inside `sub_82213E40`, the second thunk `0x82196808` inside `sub_821967F8` that the
-intro cards call, the function `0x82241060` between `sub_82241038` and `sub_82241078` that starting Quick Play calls,
-and the song-frame hook `0x82131658`.
+**Status:** the disc (title ID `4156081A`, 10,301,440-byte `default.xex`) codegens and is playable end-to-end — intro cards, videos, menus, Quick Play, setlists, and songs all run, with a few minor remaining graphical glitches. A plain controller is reported to the game as a guitar (XInput subtype 6), so the "you must use a Guitar Controller" warning does not appear. The music is coherent from the title screen on: by default FMOD mixes inline on the SDK's audio worker (`ghworldtour_fmod_on_audio_thread = true`, `audio_callback_min_interval_us = 0`; passing `--ghworldtour_fmod_on_audio_thread=false` restores `audio_callback_min_interval_us = 3000`) and runs the audio threads with Pro Audio priority. The launcher's **Strum with the frets** switch is on by default (GHWT has no auto-strum) and the game gates it to songs through the `sub_82131658` song-frame hook. V-Sync defaults off because on a 144/165 Hz display it adds present queue latency. The corrections the analyzer needed are in `ghworldtour_functions.toml`: seven branch targets, the alternate entry point `0x82213E60` inside `sub_82213E40`, the second thunk `0x82196808` inside `sub_821967F8` that the intro cards call, the function `0x82241060` between `sub_82241038` and `sub_82241078` that starting Quick Play calls, and the song-frame hook `0x82131658`.
+
+### High frame rates, upscaling, and GPU support
+
+- **120+ FPS simulation:** The launcher's frame rate setting (`ghworldtour_frame_rate`, supporting `60`, `120`, `144`, `160`, `165`, or `240`) drives the emulated vertical blank rate (`video_mode_refresh_rate`), while `src/framerate.cpp` (`ghworldtour_frame_rate_fix = true`) keeps frame-counted waits, whammy sustains, loading animations, and skipped-frame inputs at console speed.
+- **Frame generation (60 FPS base → 120+ FPS shown):** Passing `--native_x_renderer_frame_generation=true` alongside a temporal upscaler (`dlaa`, `dlss_*`, or `fsr_*`) and `ghworldtour_frame_rate` at `120` or higher halves the game's simulation rate (e.g., 60 FPS base simulation for 120 FPS shown) and generates intermediate frames via NVIDIA DLSS-G or AMD FSR 3.1 (`native_x_renderer_frame_generation_provider=auto|nvidia|amd`). The launcher's frame-generation row is currently hidden (`kFrameGenerationRow` disabled) and must be enabled on the command line because in-song frame generation, note-highway motion (`AdjustHighwayMotion`), and 120 FPS pacing have not yet been interactively verified in a desktop song run (boot behavior is verified; see [`docs/native-x-renderer.md`](docs/native-x-renderer.md)). When frame generation is active, run the in-game audio/video calibration if notes feel slightly delayed relative to the audio.
+- **GPU requirements and non-RTX options:**
+  - **NVIDIA RTX 20+:** Supports NVIDIA DLSS Super Resolution and DLAA (`--native_x_renderer_antialiasing=dlaa|dlss_quality|dlss_balanced|dlss_performance|dlss_ultra_performance`, or **Upscaling: NVIDIA DLSS** / **Antialiasing: DLAA** in the launcher).
+  - **NVIDIA RTX 40+ with HAGS:** Required for NVIDIA DLSS-G frame generation (Windows Hardware-Accelerated GPU Scheduling enabled).
+  - **GTX, AMD, and Intel GPUs:** Use **AMD FSR 3.1** (`--native_x_renderer_antialiasing=fsr_native|fsr_quality|fsr_balanced|fsr_performance|fsr_ultra_performance`, or **Upscaling: AMD FSR 3.1** in the launcher; also provides FSR 3.1 frame generation fallback with `provider=auto`), **AMD FSR 1** (`--native_x_renderer_scaling=fsr`, or **Upscaling: AMD FSR 1**), **NVIDIA Image Scaling (NIS)** (`--native_x_renderer_scaling=nis`, or **Upscaling: NVIDIA NIS**), or **SMAA / FXAA** (`--native_x_renderer_antialiasing=smaa|fxaa`, or **Antialiasing** in the launcher when temporal upscaling is off). Sharpness is tuned with `--native_x_renderer_sharpness`. If a temporal upscaler is unavailable on the active GPU or driver, the renderer falls back cleanly to SMAA.
+- **Diagnostic Fallback Renderer:** When reporting graphical glitches, compare against the SDK's Xenos emulation path by switching **Renderer** in the launcher or passing `--native_x_renderer=false` (with default `d3d12` or `--gpu_backend=vulkan`).
 
 ## Layout
 
@@ -102,13 +101,15 @@ and the song-frame hook `0x82131658`.
 |---|---|
 | `assets/` | Your game files (`default.xex` and the disc content); not tracked by git. |
 | `generated/` | The codegen's C++ output (not tracked; `generated/rexglue.cmake` is). |
-| `src/` | The app (`main.cpp`, `ghworldtour_app.h`), startup/profile glue (`startup.cpp/h`) and shared names (`project.h`). |
+| `src/` | The app (`main.cpp`, `ghworldtour_app.h`), startup/profile glue (`startup.cpp/h`), frame-rate/input hooks, and shared names (`project.h`). |
 | `launcher/` | This game's launcher profile: `game.h`, `game.cpp` (texts), `palette.h`, `art/background.svg`. |
 | `installer/` | Per-user Inno Setup script (`ghworldtour.iss`) and wizard image generator (`make_images.ps1`). |
+| `native_x_renderer/` | NativeXRenderer submodule (Direct3D 12 / Vulkan host renderer); keep on upstream `origin/main`. |
 | `recomp_launcher/` | RecompLauncher's code (the launcher itself); keep it clean. |
 | `patches/` | Tracked patches applied by CMake to the SDK, NativeXRenderer, and RecompLauncher. |
+| `docs/` | Development guide (`development.md`), NativeXRenderer notes (`native-x-renderer.md`), ADRs, and agent docs. |
 | `tools/` | Scenario runner, address lookup, body-similarity search, `check.ps1`, `menu-map.md`. |
-| `res/` | Windows resources: version information and the icon (`icon.ico`). |
+| `res/` | Windows resources, icon (`icon.ico`), and the shipped `4156081A.pipelines.list` shader pipeline list. |
 | `cmake/` | The build's codegen-stamp fix. |
 | `ghworldtour_manifest.toml` | Codegen input: the XEX and the analyzer's correction files. |
 | `ghworldtour_functions.toml` | Manual corrections for the analyzer. |
