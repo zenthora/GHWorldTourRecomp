@@ -24,7 +24,8 @@ SOFTWARE.
 ---
 
 This license covers this project's own code only (src/, launcher/, cmake/,
-tools/, res/, the configuration files and the documentation). It does not cover
-the ReXGlue SDK and its third-party components (see THIRD_PARTY_NOTICES.md),
-nor Guitar Hero: World Tour, its code or its assets, which belong to their
-respective owners.
+tools/, res/, installer/, patches/, the configuration files and the
+documentation; patches in patches/ target upstream repositories under their
+respective licenses). It does not cover the ReXGlue SDK and its third-party
+components (see THIRD_PARTY_NOTICES.md), nor Guitar Hero: World Tour, its code
+or its assets, which belong to their respective owners.
