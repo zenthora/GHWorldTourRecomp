@@ -113,8 +113,10 @@ if absent, shaders compile on first use and cache in `<user data>/cache/native_x
    draw has a shader, a declaration, a target, and a plausible vertex format and stride.
 
 3. Turn the renderer on: `--native_x_renderer=true`, or the launcher's Graphics page ("Renderer"). Antialiasing
-   is `native_x_renderer_antialiasing=smaa|fxaa`; the upscalers take the view boundary above
-   (`native_x_renderer_upscaling=dlss|fsr3`). The launcher drives all of it through `ghworldtour_options.toml`.
+   is `native_x_renderer_antialiasing=smaa|fxaa`; the temporal upscalers take the view boundary above and are
+   chosen by the same cvar (`dlaa|dlss_quality|dlss_balanced|dlss_performance|dlss_ultra_performance` and
+   `fsr_native|fsr_quality|fsr_balanced|fsr_performance|fsr_ultra_performance`; there is no `native_x_renderer_upscaling`
+   cvar). The launcher drives all of it through `ghworldtour_options.toml`.
 
 4. Run the scenarios: `tools/scenario.ps1 -Scenario boot|quickplay|song`. It takes the renderer's own
    options, so no copy of it is needed: `-NativeXRenderer`, `-Scaling bilinear|fsr|nis`, `-Sharpness`,
@@ -157,8 +159,9 @@ Verified on this machine (RTX 4070 Ti, Vulkan 1.4):
 
 ### Temporal upscaling and DLAA
 
-`--native_x_renderer_antialiasing=dlaa` (or `=dlss` with `--native_x_renderer_upscaling=dlss`, and
-`=fsr_native` with `fsr3`) runs NVIDIA DLSS or AMD FSR 3.1 on the main 3D view. The game marks no views, so
+`--native_x_renderer_antialiasing=dlaa` (NVIDIA DLSS at the render resolution), `=dlss_quality|dlss_balanced|dlss_performance|dlss_ultra_performance`
+(DLSS at a reduced size) and `=fsr_native|fsr_quality|fsr_balanced|fsr_performance|fsr_ultra_performance` (AMD FSR 3.1) run NVIDIA DLSS or
+AMD FSR 3.1 on the main 3D view. The game marks no views, so
 NativeXRenderer finds it from the draws: it starts at the first 1280x720 draw that writes depth with a
 perspective matrix in its vertex constants (the camera from a vote of the draws, D118/D119), and ends at the
 `Resolve` from `0x824AE0D0` — the depth copy `sub_824ADED0` makes for the depth of field. That copy is the
@@ -169,13 +172,13 @@ The glow passes, the composite, the HUD and the note highway are drawn after tha
 the view: they keep their 1:1 pixels and are not reprojected. Verified at 1280x720 in the attract mode and in
 a song (DLAA run `ghworldtour_058`): `DLAA applied 600 times in 600 frames`, camera vote `600 of 600 views
 voted` (188-189 of 195 offers), 294-658 draw calls a frame. FSR 3.1 takes the same boundary
-(`--native_x_renderer_antialiasing=fsr_native --native_x_renderer_upscaling=fsr3`). The DLSS *quality* modes
+(`--native_x_renderer_antialiasing=fsr_native`; in a song `ghworldtour_126.log`, see "Interactive verification"). The DLSS *quality* modes
 (`dlss_quality|balanced|performance|ultra_performance`, the 3D view drawn at a reduced size, D121) use it too;
 boot-checked with DLSS Quality (`ghworldtour_090.log`): `antialiasing: DLSS Quality (experimental, D53): the 3D view
 drawn at 853x480 (scale 0.666x0.667), upscaled to 1280x720 by DLSS, with the motion of objects that move on their own;
 the main 3D view and the camera's motion found from the draws (D118, D119)` and `[frame rate] script waits in game
-frames last as at 60 FPS (vblank at 120 Hz)`. In-song evaluation of the upscaled 3D view at reduced resolution awaits
-an interactive desktop run of `tools/scenario.ps1 -Scenario song` (`CopyFromScreen` fails in non-interactive sessions).
+frames last as at 60 FPS (vblank at 120 Hz)`. In a song at reduced resolution it ran 18,000 frames in
+`ghworldtour_125.log` (`tools/runs/nxr-dlss-quality-song`, see "Interactive verification").
 
 The log says which state a frame is in (D139), one line per change that persists half a second: `3D view: upscaled
 at the profile's point 0x824ae0d0` when the upscaler ran on the view, `3D view: found, but its upscale point … did
@@ -214,8 +217,90 @@ Verified without a desktop session (`ghworldtour_088.log`, `ghworldtour_089.log`
 frame between each two of the game's, with V-Sync (D123, D142)` (`requested "auto"` in the second run, no AMD
 fallback) and `frame generation (D123): 0 frames generated, 1 game frames without one; the game's frames 16.70 ms apart`; no FATAL or `[error]`.
 
-Not verified: any in-song frame generation (`NGX_VK_CREATE_DLSSG`, `NGX_VK_EVALUATE_DLSSG`, the `provider=auto`
-fallback to AMD), the `3D view: upscaled at the profile's point 0x824ae0d0` line, DLSS Quality, 120 FPS pacing and
-whether `AdjustHighwayMotion` matches the highway draws. These need `tools/scenario.ps1 -Scenario song` from an
-interactive desktop (`CopyFromScreen` fails without one). The launcher's frame generation row stays off
+In a song (interactive desktop, RTX 4070 Ti, `--ghworldtour_frame_rate=120`): AMD FSR 3.1 frame generation
+(`provider=amd`) generated frames for 18,000 frames, while NVIDIA DLSS-G (`provider=auto`) logged an `[error]` at
+its first evaluate and generated none; both are in "Interactive verification".
+
+Not verified: whether `AdjustHighwayMotion` matches the highway draws (no log line reports it; the run logs
+only the 2D layer's motion, `ghworldtour_128.log`: `26929 draws, 26909 matched with the last frame's` at frame 18000),
+how 120 FPS pacing feels (the logs give the game's frame spacing, 16.59-17.55 ms), NVIDIA DLSS-G producing a
+frame, and the `provider=auto` fallback to AMD after an NVIDIA failure (`FallbackAfterNvidiaFailure()` runs when
+`CreateNvidiaFeature` fails, not when `NGX_VK_EVALUATE_DLSSG` fails: `patches/native_x_renderer-dlssg-and-depth-upscale.patch`
+lines 1025, 1081 and 1166-1176). The launcher's frame generation row stays off
 (`kFrameGenerationRow`, in the launcher submodule): the option is reached with `--native_x_renderer_frame_generation=true`.
+
+## Interactive verification (2026-11-18)
+
+Six `tools/scenario.ps1 -Scenario song` runs from an interactive desktop, one after another, on an RTX 4070 Ti
+(`DXGI adapter: NVIDIA GeForce RTX 4070 Ti (vendor 0x10DE, device 0x2782)`, Vulkan 1.4.357, driver 621.01), 1280x720
+window, `--ghworldtour_frame_rate=60` (120 for the two frame generation runs). Each run's screenshots are in
+`tools/runs/<dir>` (`*-review.png`; the full-size PNGs are the same frames). A controller was plugged in and played
+live during the runs (`ghworldtour_123.log`: `SDL JoystickAdded: "Xbox 360 Controller"`), so the song, the venue and the
+camera differ from capture to capture: the screenshots show the same screens and elements, not the same frame.
+The `[warning]` lines in these logs are the same few stubs and notices in every run (`IoDismountVolumeByFileHandle`,
+`XAudioOverrideSpeakerConfig`, `XamInputSendStayAliveRequest` stubs, `gamecontrollerdb.txt` missing, the Vulkan device
+list).
+
+| Run (`tools/runs/<dir>`) | Log (`out/build/win-amd64-release/logs/`) | Exit | Frames | `[error]` / FATAL | What the log shows |
+|---|---|---|---|---|---|
+| `xenos-d3d12-song` | `ghworldtour_123.log` | 0 | not logged | 0 / 0 | `[options] ... gpu_backend=d3d12 ... native_x_renderer=false ... ghworldtour_frame_rate=60`, `DXGI adapter: NVIDIA GeForce RTX 4070 Ti`, no `D3D12Presenter` line |
+| `nxr-smaa-song` | `ghworldtour_124.log` | 1 | 18,000 | 0 / 0 | `antialiasing: SMAA`; `frame 18000: antialiasing (SMAA) applied 600 times in 600 frames`; no `3D view:` line |
+| `nxr-dlss-quality-song` | `ghworldtour_125.log` | 0 | 18,000 | 0 / 0 | `DLSS Quality: 853x480 to 1280x720`; `3D view: upscaled at the profile's point 0x824ae0d0`; `frame 18000: DLSS Quality applied 600 times in 600 frames` |
+| `nxr-fsr3-native-song` | `ghworldtour_126.log` | 0 | 18,000 | 0 / 0 | `FSR 3.1: AMD's 3.1.4 upscaler, 1280x720 to 1280x720, LDR`; `3D view: upscaled at the profile's point 0x824ae0d0`; `FSR 3.1 Native AA applied 600 times in 600 frames` |
+| `nxr-dlaa-dlssg-song` | `ghworldtour_127.log` | 0 | 18,000 | **1** / 0 | `frame generation: NVIDIA DLSS-G (requested "auto")`; `[error] ... NVIDIA DLSS-G evaluate failed (NVSDK_NGX_Result_FAIL_InvalidParameter: 0xBAD00005)`; `0 frames generated` in every interval; `DLAA applied 600 times in 600 frames` |
+| `nxr-fsr3-fg-amd-song` | `ghworldtour_128.log` | 0 | 18,000 | 0 / 0 | `frame generation: AMD FSR 3.1 (requested "amd")`; `AMD's 1.1.3 frame interpolation`; 528-600 frames generated per 600 frames after the first interval, 17,105 in all; `FSR 3.1 Native AA applied 600 times in 600 frames` |
+
+In every NativeXRenderer run `frame 600` to `frame 18000` report `0 failed` and `0 without targets` draws for the
+sampled intervals (31 samples per log, 677-691 draw calls at most). Run-specific notes:
+
+- **#12, Xenos D3D12 (`ghworldtour_123.log`, `tools/runs/xenos-d3d12-song`).** The Xenos path on `gpu_backend=d3d12`
+  ran from the loading screen (`0-title-review.png`) through the Quick Play song list (`2-started-review.png`,
+  `HOTEL CALIFORNIA: THE EAGLES, 1976`), the loading tip (`3-confirm-1-review.png`) into a song with the highway, HUD
+  and band (`3-confirm-6-review.png`, `4-song-review.png`); the log has no `[error]` or FATAL and no `D3D12Presenter`
+  failure. The Xenos path logs nothing when its swap chain succeeds, so the swap chain is shown by the screenshots,
+  not by a line. It replaces the earlier boot attempt `ghworldtour_121.log` (`[error] D3D12Presenter: Failed to
+  create a swap chain for the HWND`, from a session without an interactive desktop; `ghworldtour_122.log` ran 205 s
+  without that error and its screenshot step then failed with `CopyFromScreen: The handle is invalid`).
+- **SMAA exit 1 (`ghworldtour_124.log`).** `scenario.ps1` requires a `3D view: (upscaled|found)` line, which is only
+  logged when a temporal upscaler is on (SMAA has no view boundary to report). The renderer drew a song the whole
+  run (`SMAA applied 600 times in 600 frames` up to frame 18000; `4-song-review.png` is in a song), so the exit code
+  says the scenario's check does not apply to SMAA, not that the run failed.
+- **DLSS Quality and AMD FSR 3.1 Native in a song (`ghworldtour_125.log`, `ghworldtour_126.log`).** `3D view:
+  upscaled` is logged, the highway, the HUD (rock meter, score, multiplier) and the fret buttons are drawn at 1:1
+  pixels after the view in `3-confirm-6-review.png` and `4-song-review.png` of both runs; the reduced 853x480 view
+  of the DLSS Quality run is upscaled without visible loss of the HUD.
+- **#11, AMD FSR 3.1 frame generation in a song (`ghworldtour_128.log`).** Both the upscaler and the interpolation are
+  AMD's (`AMD's 3.1.4 upscaler`, `AMD's 1.1.3 frame interpolation`), the game's frames stay 16.59-16.75 ms apart after
+  the first interval (20.16 ms in the first, `frame 600`), and the 2D layer's motion matches 97-100 % of its draws
+  after the first interval (for example `frame 3000: 32644 draws, 32470 matched with the last frame's`). The highway and the band in
+  `4-song-review.png` and `3-confirm-6-review.png` show no tearing or doubled notes in the stills; motion quality
+  cannot be judged from stills.
+- **#11, NVIDIA DLSS-G in a song (`ghworldtour_127.log`).** Not working: `NGX_VK_CREATE_DLSSG` passes (`frame
+  generation: NVIDIA DLSS-G frame interpolation, the view 1280x720, the picture 1280x720 (D142)` at 23:34:40.253) and
+  `NGX_VK_EVALUATE_DLSSG` fails once (`[error] ... 0xBAD00005` at 23:34:40.263, logged once by design); frame
+  generation stays off for 18,000 frames, with DLAA still applied on 600 of 600 frames and the picture intact
+  (`3-confirm-6-review.png`, `4-song-review.png`). `provider=auto` stayed on NVIDIA, as the fallback only covers a
+  failed feature creation. `nvngx_dlssg.dll` is not in `out/build/win-amd64-release` (only `nvngx_dlss.dll` and
+  `amd_fidelityfx_vk.dll` are); whether the DLL's absence is the cause was not tested.
+- **Non-RTX GPUs (#11).** A GTX, AMD or Intel GPU was not available: every run above is on the RTX 4070 Ti
+  (`vendorID 0x10DE`). What these runs add for such cards is AMD FSR 3.1 upscaling (`ghworldtour_126.log`) and AMD
+  FSR 3.1 frame generation (`ghworldtour_128.log`) working in a song with `provider=amd` on this card; the card-side
+  detection and the runtime SMAA fallback on a card without DLSS remain untested on real hardware.
+
+### A/B comparison (#17)
+
+Xenos (`xenos-d3d12-song`) against the five NativeXRenderer runs, from the `*-review.png` stills of each run
+(0-title, 1-quickplay, 2-started, 3-confirm-1, 3-confirm-6, 4-song); no video and no pixel diff, and no two stills
+show the same frame, so only screens and elements are compared.
+
+| Area | Observed | Class |
+|---|---|---|
+| Menus and UI (loading screens, Quick Play song list, loading tips, song-failed menu, instruction screen) | Same artwork, text, pills and button prompts on Xenos (`xenos-d3d12-song`: `0-title`, `1-quickplay`, `2-started`, `3-confirm-1`) and NativeXRenderer (`nxr-dlss-quality-song`: `0-title`, `1-quickplay`; `nxr-dlaa-dlssg-song`: `1-quickplay`, the `FAILED SATCH BOOGIE` menu); no missing textures, no wrong colors | no difference |
+| Venue and crowd (band, drums, amps, lights, crowd silhouettes, signs) | Present and lit on both paths (`xenos-d3d12-song/4-song`, `nxr-smaa-song/1-quickplay`, `nxr-fsr3-native-song/0-title`, `nxr-fsr3-fg-amd-song/3-confirm-6`); no missing geometry or textures seen | no difference |
+| Shaders, depth of field, glow | The game's depth of field blurs the background in close-ups on both paths (`xenos-d3d12-song/3-confirm-6` and `nxr-dlss-quality-song/4-song`, `nxr-fsr3-native-song/3-confirm-6`, `nxr-dlaa-dlssg-song/4-song`, `nxr-fsr3-fg-amd-song/4-song`); colored stage washes (pink, green, blue, red) and light shafts render in both | shared with Xenos emulation (the game's own effect) |
+| Note highway and HUD | Board, beat lines, gems, sustains, fret buttons, rock meter, score and multiplier draw on every run and keep their 1:1 pixels, including under DLSS Quality (`nxr-dlss-quality-song/4-song`), FSR Native and the two frame generation runs | no difference |
+| Bottom ~10 % of the NativeXRenderer captures | The strip under the highway shows host desktop content (Explorer items, a console line with `x_renderer_frame_generation=false ghworldtour_frame_rate=60 ... trace_interval=60`) in `nxr-smaa-song`, `nxr-dlss-quality-song`, `nxr-fsr3-native-song`, `nxr-dlaa-dlssg-song` and `nxr-fsr3-fg-amd-song`, not in `xenos-d3d12-song`; the console line is the matrix's own command line, which fits another window covering the bottom of the capture rectangle (not confirmed) | capture artifact (a host window over the game), not a renderer artifact |
+| Temporal artifacts (ghosting, shimmer, doubled notes) with DLSS Quality, FSR Native, DLAA and frame generation | None visible in the stills; stills cannot show them | not assessed |
+
+No NativeXRenderer-only graphical glitch was observed in the stills of the five runs, and none that Xenos has and the
+NativeXRenderer runs lack. The README's "minor remaining graphical glitches" is therefore not itemized by these runs.
