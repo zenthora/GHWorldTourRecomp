@@ -28,7 +28,7 @@
   - Builtin hygiene hooks: `trailing-whitespace` and `end-of-file-fixer` (excluding `patches/*.patch`), `check-added-large-files`, `check-merge-conflict`, `detect-private-key`, `check-toml`, and `check-json`.
   - `check-guardrails`: runs `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check.ps1`, which verifies:
     - `recomp_launcher` has `patches/recomp_launcher-3.14.0-game-defaults.patch` applied.
-    - The active SDK checkout (`REXSDK_DIR`, `thirdparty/rexglue-sdk`, or `../rexglue-sdk-recomp` when present) has `patches/rexglue-sdk-set-remap-gate.patch` applied.
+    - The active SDK checkout (`REXSDK_DIR:PATH` in configured `out/build/*/CMakeCache.txt` caches — checked newest first across `win-amd64-release`, `win-amd64-relwithdebinfo`, `win-amd64-debug`, and any other configured `out/build/*` directory — then `$env:REXSDK_DIR`, `thirdparty/rexglue-sdk`, or `../rexglue-sdk-recomp` when present) has `patches/rexglue-sdk-set-remap-gate.patch` applied.
     - Hand-written C++ sources under `src/` and `launcher/` conform to `.clang-format`.
     - Tracked changes have no `git diff --check` whitespace errors.
     - `native_x_renderer/` submodule stays on upstream `origin/main` and its diff matches `patches/native_x_renderer-dlssg-and-depth-upscale.patch` (with no untracked files outside `thirdparty/`).

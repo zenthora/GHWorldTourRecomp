@@ -1,11 +1,8 @@
 # GHWorldTourRecomp - static recompilation of Guitar Hero: World Tour (Xbox 360), built on the ReXGlue SDK and drawn by
 # the SDK's Xenos emulation.
 #
-# The ReXGlue SDK (the recomp fork, ElGuslml/rexglue-sdk branch recomp) is found in this order:
-#   1. REXSDK_DIR, when set (a rexglue-sdk source tree; CMake builds it with the project).
-#   2. thirdparty/rexglue-sdk, when present (isolated per-repo SDK checkout).
-#   3. GHWORLDTOUR_SDK_SOURCE_DIR (defaults to ../rexglue-sdk-recomp, a sibling checkout shared
-#      with other projects such as GHMetalRecomp; patched in place at configure time).
+# SDK resolution order (`REXSDK_DIR`, `thirdparty/rexglue-sdk`, `GHWORLDTOUR_SDK_SOURCE_DIR`), in-place patch
+# behavior, and isolated checkout options are documented in docs/development.md ("The SDK").
 #
 # SDK boilerplate lives in generated/rexglue.cmake.
 
@@ -80,14 +77,10 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
     endif()
 
     find_package(Git REQUIRED)
-    # Clear git hook env vars so git -C targets REPO_DIR rather than a parent repository's index/object store.
-    set(_git_env
-        "${CMAKE_COMMAND}" -E env
-        --unset=GIT_INDEX_FILE --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_OBJECT_DIRECTORY
-        "${GIT_EXECUTABLE}" -C "${REPO_DIR}")
+    set(_git_cmd "${GIT_EXECUTABLE}" -C "${REPO_DIR}")
 
     execute_process(
-        COMMAND ${_git_env} apply --reverse --check "${PATCH_FILE}"
+        COMMAND ${_git_cmd} apply --reverse --check "${PATCH_FILE}"
         RESULT_VARIABLE GHWT_PATCH_APPLIED OUTPUT_QUIET ERROR_QUIET)
     if(GHWT_PATCH_APPLIED EQUAL 0)
         message(STATUS "GHWT ${LABEL} patch already applied to ${REPO_DIR}")
@@ -96,7 +89,7 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
 
     # Record the applied patch inside REPO_DIR's git dir so a tracked .patch update can reverse cleanly.
     execute_process(
-        COMMAND ${_git_env} rev-parse --git-dir
+        COMMAND ${_git_cmd} rev-parse --git-dir
         OUTPUT_VARIABLE _repo_git_dir
         OUTPUT_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE _git_dir_res
@@ -110,11 +103,11 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
 
     if(_applied_stamp AND EXISTS "${_applied_stamp}")
         execute_process(
-            COMMAND ${_git_env} apply --reverse --check "${_applied_stamp}"
+            COMMAND ${_git_cmd} apply --reverse --check "${_applied_stamp}"
             RESULT_VARIABLE _old_reverses OUTPUT_QUIET ERROR_QUIET)
         if(_old_reverses EQUAL 0)
             execute_process(
-                COMMAND ${_git_env} apply --reverse "${_applied_stamp}"
+                COMMAND ${_git_cmd} apply --reverse "${_applied_stamp}"
                 RESULT_VARIABLE _reverse_res
                 OUTPUT_VARIABLE _reverse_out ERROR_VARIABLE _reverse_err)
             if(NOT _reverse_res EQUAL 0)
@@ -130,12 +123,12 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
     endif()
 
     execute_process(
-        COMMAND ${_git_env} apply "${PATCH_FILE}"
+        COMMAND ${_git_cmd} apply "${PATCH_FILE}"
         RESULT_VARIABLE GHWT_PATCH_RESULT
         OUTPUT_VARIABLE GHWT_PATCH_OUTPUT ERROR_VARIABLE GHWT_PATCH_ERROR)
     if(NOT GHWT_PATCH_RESULT EQUAL 0)
         execute_process(
-            COMMAND ${_git_env} status --porcelain --untracked-files=no --ignore-submodules=all
+            COMMAND ${_git_cmd} status --porcelain --untracked-files=no --ignore-submodules=all
             OUTPUT_VARIABLE _repo_status
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET)

@@ -38,12 +38,33 @@ function Invoke-WithCleanGitEnv([scriptblock]$Action) {
 }
 
 function Resolve-SdkCheckout {
-    $cache = Join-Path $root "out\build\win-amd64-release\CMakeCache.txt"
-    if (Test-Path -LiteralPath $cache) {
-        $match = Select-String -LiteralPath $cache -Pattern '^REXSDK_DIR:PATH=(.+)$' | Select-Object -First 1
-        if ($match) {
-            $cached = $match.Matches[0].Groups[1].Value.Trim()
-            if ($cached -and (Test-Path -LiteralPath $cached)) { return $cached }
+    $buildRoot = Join-Path $root "out\build"
+    if (Test-Path -LiteralPath $buildRoot -PathType Container) {
+        $presetPriority = @{
+            "win-amd64-release"        = 0
+            "win-amd64-relwithdebinfo" = 1
+            "win-amd64-debug"          = 2
+        }
+        $caches = Get-ChildItem -LiteralPath $buildRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $cacheFile = Join-Path $_.FullName "CMakeCache.txt"
+                if (Test-Path -LiteralPath $cacheFile -PathType Leaf) {
+                    [PSCustomObject]@{
+                        File     = Get-Item -LiteralPath $cacheFile
+                        Priority = if ($presetPriority.ContainsKey($_.Name)) { $presetPriority[$_.Name] } else { 99 }
+                        Name     = $_.Name
+                    }
+                }
+            } |
+            Sort-Object @{ Expression = { $_.File.LastWriteTimeUtc }; Descending = $true },
+                        @{ Expression = { $_.Priority }; Descending = $false },
+                        @{ Expression = { $_.Name }; Descending = $false }
+        foreach ($entry in $caches) {
+            $match = Select-String -LiteralPath $entry.File.FullName -Pattern '^REXSDK_DIR:PATH=(.+)$' | Select-Object -First 1
+            if ($match) {
+                $cached = $match.Matches[0].Groups[1].Value.Trim()
+                if ($cached -and (Test-Path -LiteralPath $cached)) { return $cached }
+            }
         }
     }
     if ($env:REXSDK_DIR -and (Test-Path -LiteralPath $env:REXSDK_DIR)) {
