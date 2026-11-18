@@ -93,10 +93,10 @@ either; its commit is the same inline store. Every draw in a trace is a `DrawVer
 
 The compiled shaders are in the CHNK-compressed `DATA/COMPRESSED/FXFILES/MaterialLibrary.bin.xen` (World Tour
 keeps only this copy; the uncompressed `DATA/FXFILES/MaterialLibrary.bin.xen` is the material table). The
-profile names the compressed file for the pipeline list. `kHasPipelineList = true` in `launcher/game.h` enables the
-launcher's "Compiling shaders" pre-compilation flow when a `4156081A.pipelines.list` file is present, though no
-`.pipelines.list` file is tracked in git (generate one with `--native_x_renderer_make_pipeline_list`; otherwise shaders
-compile on first use and cache in `<user data>/cache/native_x_renderer`).
+profile names the compressed file for the pipeline list (`res/4156081A.pipelines.list`, tracked in git since `a8925aa` and
+staged beside the binary by `tools/package-release.ps1`). `kHasPipelineList = true` in `launcher/game.h` enables the
+launcher's "Compiling shaders" pre-compilation flow for that list (regenerate with `--native_x_renderer_make_pipeline_list`;
+if absent, shaders compile on first use and cache in `<user data>/cache/native_x_renderer`).
 
 ## Turning it on and verifying
 

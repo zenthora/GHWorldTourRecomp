@@ -578,7 +578,7 @@ index 45130c2..9aa7da5 100644
    // 1.4 KB, plus the float constants its shaders use), with several frames in flight.
    create_info.DynamicHeapSize = 256 << 20;
 diff --git a/src/framegen.cpp b/src/framegen.cpp
-index f609c68..45c637f 100644
+index f609c68..477c9a9 100644
 --- a/src/framegen.cpp
 +++ b/src/framegen.cpp
 @@ -6,21 +6,29 @@
@@ -712,7 +712,7 @@ index f609c68..45c637f 100644
    if (type == FFX_API_MESSAGE_TYPE_ERROR) {
      REXLOG_ERROR("[native_x_renderer] frame generation: {}", text);
    } else {
-@@ -91,18 +173,114 @@ FfxApiResource Resource(ITexture* texture, uint32_t state, bool unordered_access
+@@ -91,18 +173,116 @@ FfxApiResource Resource(ITexture* texture, uint32_t state, bool unordered_access
    VkImage image = texture_vk ? texture_vk->GetVkImage() : VK_NULL_HANDLE;
    return ffxApiGetResourceVK(reinterpret_cast<void*>(image), description, state);
  }
@@ -745,6 +745,8 @@ index f609c68..45c637f 100644
 +  switch (active_provider_) {
 +    case Provider::kNvidia: return "NVIDIA DLSS-G";
 +    case Provider::kAmd: return "AMD FSR 3.1";
++    case Provider::kNone:
++    case Provider::kAuto:
 +    default: return "off";
 +  }
 +}
@@ -833,7 +835,7 @@ index f609c68..45c637f 100644
    HMODULE module = LoadLibraryW((folder + L"amd_fidelityfx_vk.dll").c_str());
    if (!module) {
      REXLOG_WARN("[native_x_renderer] frame generation: amd_fidelityfx_vk.dll is not next to the game's executable");
-@@ -126,11 +304,42 @@ bool FrameGeneration::Load(IRenderDevice* device) {
+@@ -126,11 +306,43 @@ bool FrameGeneration::Load(IRenderDevice* device) {
    module_ = module;
    return true;
  #else
@@ -846,8 +848,9 @@ index f609c68..45c637f 100644
 +bool FrameGeneration::Load(IRenderDevice* device, Provider provider) {
 +  device_ = device;
 +  requested_provider_ = provider;
-+  active_provider_ = Provider::kAuto;
++  active_provider_ = Provider::kNone;
 +  logged_version_ = false;
++  if (provider == Provider::kNone) return false;
 +  if (provider == Provider::kNvidia) {
 +    if (LoadNvidia()) {
 +      active_provider_ = Provider::kNvidia;
@@ -877,7 +880,7 @@ index f609c68..45c637f 100644
  bool FrameGeneration::CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width,
                                      uint32_t render_height) {
  #if NATIVE_X_RENDERER_FSR
-@@ -192,20 +401,158 @@ void FrameGeneration::DestroyContext() {
+@@ -192,20 +404,158 @@ void FrameGeneration::DestroyContext() {
  #if NATIVE_X_RENDERER_FSR
    if (!context_) return;
    // Its textures may still be in use by frames in flight.
@@ -981,7 +984,7 @@ index f609c68..45c637f 100644
 +      return true;
 +    }
 +  }
-+  active_provider_ = Provider::kAuto;
++  active_provider_ = Provider::kNone;
 +#endif
 +  return false;
 +}
@@ -1039,7 +1042,7 @@ index f609c68..45c637f 100644
    if (!context_ || context_size_[0] != display_width || context_size_[1] != display_height ||
        context_size_[2] != depth.Width || context_size_[3] != depth.Height) {
      if (!CreateContext(display_width, display_height, depth.Width, depth.Height)) return;
-@@ -258,9 +605,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
+@@ -258,9 +608,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
    reset_ = reset;
  #else
    (void)context;
@@ -1050,7 +1053,7 @@ index f609c68..45c637f 100644
  #endif
  }
  
-@@ -268,28 +613,142 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -268,28 +616,142 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
                                 const int32_t area[4]) {
    bool prepared = prepared_;
    prepared_ = false;
@@ -1210,7 +1213,7 @@ index f609c68..45c637f 100644
    }
    FfxApiRect2D rect{area[0], area[1], area[2], area[3]};
    ffxConfigureDescFrameGeneration configure{};
-@@ -352,6 +811,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -352,6 +814,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
    (void)hudless;
    (void)area;
    (void)prepared;
@@ -1218,7 +1221,7 @@ index f609c68..45c637f 100644
    return false;
  #endif
  }
-@@ -359,6 +819,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -359,6 +822,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
  void FrameGeneration::EndFrame() {
    ++frame_id_;
    prepared_ = false;
@@ -1227,7 +1230,7 @@ index f609c68..45c637f 100644
  
  }  // namespace native_x_renderer
 diff --git a/src/framegen.h b/src/framegen.h
-index ab4bed3..68ff446 100644
+index ab4bed3..d9ea8a4 100644
 --- a/src/framegen.h
 +++ b/src/framegen.h
 @@ -1,16 +1,15 @@
@@ -1253,13 +1256,14 @@ index ab4bed3..68ff446 100644
  
  #include "DeviceContext.h"
  #include "RefCntAutoPtr.hpp"
-@@ -21,8 +20,21 @@ namespace native_x_renderer {
+@@ -21,8 +20,22 @@ namespace native_x_renderer {
  
  class FrameGeneration {
   public:
 -  // Loads AMD's library from the executable's folder. False (logged) when it is missing or not in this build.
 -  bool Load(Diligent::IRenderDevice* device);
 +  enum class Provider : uint8_t {
++    kNone,    // Frame generation disabled / not active
 +    kAuto,    // NVIDIA DLSS-G when available on the GPU/driver, else AMD FSR 3.1
 +    kNvidia,  // NVIDIA DLSS-G (NGX Vulkan)
 +    kAmd,     // AMD FSR 3.1 (amd_fidelityfx_vk.dll)
@@ -1277,7 +1281,7 @@ index ab4bed3..68ff446 100644
  
    // This frame's 3D view, after the upscale.
    struct View {
-@@ -33,8 +45,8 @@ class FrameGeneration {
+@@ -33,8 +46,8 @@ class FrameGeneration {
      float camera_near = 0.1f, camera_far = 1000.0f, fov_y = 1.0f;
      bool reset = false;  // the view's history starts again (a cut, or no view in the last frame)
    };
@@ -1288,7 +1292,7 @@ index ab4bed3..68ff446 100644
    void Prepare(Diligent::IDeviceContext* context, const View& view, uint32_t display_width, uint32_t display_height);
  
    // At Present, the frame composed into `current` (the window's size, RGBA8_UNORM): the frame between the last one
-@@ -60,10 +72,21 @@ class FrameGeneration {
+@@ -60,10 +73,21 @@ class FrameGeneration {
    }
  
   private:
@@ -1305,12 +1309,12 @@ index ab4bed3..68ff446 100644
  
    Diligent::IRenderDevice* device_ = nullptr;
 +  Provider requested_provider_ = Provider::kAuto;
-+  Provider active_provider_ = Provider::kAuto;
++  Provider active_provider_ = Provider::kNone;
 +
    void* module_ = nullptr;  // amd_fidelityfx_vk.dll (never unloaded)
    void* create_context_ = nullptr;
    void* destroy_context_ = nullptr;
-@@ -71,13 +94,20 @@ class FrameGeneration {
+@@ -71,13 +95,20 @@ class FrameGeneration {
    void* dispatch_ = nullptr;
    void* query_ = nullptr;
    void* context_ = nullptr;  // ffxContext
