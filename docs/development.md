@@ -34,13 +34,34 @@ git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../r
 On Windows, `git clone` leaves the libmspack symlinks (in `thirdparty/libmspack/cabextract/mspack`) as text stubs; if
 the build fails on them, replace each stub with the file it names.
 
-The project builds the SDK from that source tree (`GHWORLDTOUR_SDK_SOURCE_DIR`, default
-`../rexglue-sdk-recomp`; `REXSDK_DIR` overrides it). CMake automatically applies
-`patches/rexglue-sdk-set-remap-gate.patch` (Change 77, `SetRemapGate`) to that checkout on configure.
-NativeXRenderer compiles the SDK's graphics sources (the SPIR-V
-translator among them) in process and links the SDK's glslang and xxHash targets, none of which an installed SDK
-package carries, so the installed package is not enough. The launcher also uses the same tree through
-`RECOMP_LAUNCHER_SDK_DIR`.
+The project resolves the SDK source tree in this order:
+
+1. `REXSDK_DIR`, when passed explicitly (for example `-DREXSDK_DIR=C:/src/rexglue-sdk-ghwt`),
+2. `thirdparty/rexglue-sdk` inside this repository, when present,
+3. `GHWORLDTOUR_SDK_SOURCE_DIR` (defaults to the sibling `../rexglue-sdk-recomp`).
+
+`RECOMP_LAUNCHER_SDK_DIR` defaults to the selected `REXSDK_DIR` so the game and launcher share the same SDK tree.
+NativeXRenderer compiles the SDK's graphics sources (the SPIR-V translator among them) in process and links the SDK's
+glslang and xxHash targets, none of which an installed SDK package carries, so an installed package alone is not enough.
+
+### Shared SDK side effects and isolation
+
+CMake automatically applies `patches/rexglue-sdk-set-remap-gate.patch` (Change 77, `SetRemapGate`) **in place** to the
+selected SDK checkout during configure, just as it applies `patches/native_x_renderer-dlssg-and-depth-upscale.patch`
+to `native_x_renderer/` and `patches/recomp_launcher-3.14.0-game-defaults.patch` to `recomp_launcher/`.
+
+If you use the default sibling `../rexglue-sdk-recomp` checkout, configuring `GHWorldTourRecomp` modifies that shared
+tree's working copy in place (leaving it dirty in git). Contributors who also build
+[GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp) against `../rexglue-sdk-recomp` and want to keep that
+sibling tree clean should use an isolated SDK checkout for `GHWorldTourRecomp`:
+
+- **Option A (`thirdparty/rexglue-sdk`):** clone the SDK inside this repository (`git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git thirdparty/rexglue-sdk`). CMake automatically prefers `thirdparty/rexglue-sdk` over `../rexglue-sdk-recomp` when `REXSDK_DIR` is not set.
+- **Option B (`REXSDK_DIR`):** clone to any separate folder and pass `-DREXSDK_DIR=<path>` when configuring (`cmake --preset win-amd64-release -DREXSDK_DIR=C:/path/to/rexglue-sdk-ghwt`).
+
+All three `patches/*.patch` applications check `git apply --reverse --check` before applying, so re-running
+`cmake --preset` is idempotent. Each applied patch is also recorded inside the target checkout's `.git` directory so
+updated `.patch` files reverse and re-apply cleanly when there are no conflicting local edits; if a local modification
+or upstream change conflicts, CMake stops with `git -C ... diff` and `git -C ... checkout -- .` instructions.
 
 ## Building
 
