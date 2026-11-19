@@ -34,7 +34,7 @@ index 5d11237..74d3538 100644
      add_custom_command(TARGET ${target} POST_BUILD
                         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NATIVE_X_RENDERER_FFX_DLL}"
 diff --git a/docs/decisions.md b/docs/decisions.md
-index 7a4acdd..0c1a8c4 100644
+index 7a4acdd..8347dc3 100644
 --- a/docs/decisions.md
 +++ b/docs/decisions.md
 @@ -6,6 +6,21 @@ end, and do not rewrite old ones. If a decision changes, add a new entry that su
@@ -59,7 +59,7 @@ index 7a4acdd..0c1a8c4 100644
  ---
  
  ## D1 — Replace the D3D layer, not the GPU (2026-10-13)
-@@ -4787,3 +4802,164 @@ condition variable costs microseconds more than the spin).
+@@ -4787,3 +4802,169 @@ condition variable costs microseconds more than the spin).
  - The Xenos path keeps the 2 bits.
  
  **Revisit if:** a game reads a `2_10_10_10_FLOAT` copy's alpha as a mask that expects the format's 4 steps.
@@ -200,13 +200,18 @@ index 7a4acdd..0c1a8c4 100644
 +- In `framegen.{h,cpp}`, add an NVIDIA NGX DLSS-G backend alongside AMD FidelityFX (`amd_fidelityfx_vk.dll`):
 +  - Query capability via `NVSDK_NGX_VULKAN_GetCapabilityParameters` (`NVSDK_NGX_Parameter_FrameGeneration_Available`),
 +    initializing NGX with `NVSDK_NGX_VULKAN_Init_with_ProjectID` when not already initialized by `DLSSProviderVk`.
-+  - Create the DLSS-G feature via `NGX_VK_CREATE_DLSSG` and evaluate via `NGX_VK_EVALUATE_DLSSG` into `output_` using
-+    `pBackbuffer` (`current`), `pDepth` (`view.depth`), `pMVecs` (`view.motion` with
++  - Create the DLSS-G feature via `NGX_VK_CREATE_DLSSG` and evaluate via `NGX_VK_EVALUATE_DLSSG` into `output_` on a
++    dedicated NGX `VkCommandPool` (`VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT`),
++    `VkCommandBuffer`, and `VkFence` (flushing DiligentCore's context beforehand and passing `"DLSSG.CmdQueue"`,
++    `"DLSSG.CmdAlloc"`, `"DLSSG.FenceEvent"`, and `"DLSSG.IsRecording"` = `1` on `ngx_params_`), using `pBackbuffer`
++    (`current`), `pDepth` (`view.depth`), `pMVecs` (`view.motion` with
 +    `mvecScale = {1.0f / motion_width, 1.0f / motion_height}`), `pHudless` (`hudless`), and camera/jitter/subrect
 +    parameters.
-+  - When `provider == "auto"`, if `FrameGeneration.Available == 0` or `NGX_VK_CREATE_DLSSG` fails on the current
-+    GPU/driver/swapchain configuration, log the NGX status code clearly and fall back seamlessly to AMD FidelityFX
-+    (`amd_fidelityfx_vk.dll`).
++  - When `provider == "auto"`, if `FrameGeneration.Available == 0`, `NGX_VK_CREATE_DLSSG` fails, or
++    `NGX_VK_EVALUATE_DLSSG` fails on the current GPU/driver/swapchain configuration, log the NGX status code clearly and
++    fall back seamlessly to AMD FidelityFX (`amd_fidelityfx_vk.dll`), deferring mid-frame create/evaluate failure
++    teardown (`FallbackAfterNvidiaFailure()`) to `EndFrame()` after the current frame has been presented (while
++    `provider == "nvidia"` transitions to `Provider::kNone` without loading AMD).
 +- In `CMakeLists.txt`, link `DLSS-Headers` and `DLSS-NGX` to `native_x_renderer` when DLSS is enabled and copy
 +  `nvngx_dlssg.dll` in `native_x_renderer_copy_runtime` if present alongside `nvngx_dlss.dll`.
 +
@@ -578,7 +583,7 @@ index 45130c2..9aa7da5 100644
    // 1.4 KB, plus the float constants its shaders use), with several frames in flight.
    create_info.DynamicHeapSize = 256 << 20;
 diff --git a/src/framegen.cpp b/src/framegen.cpp
-index f609c68..477c9a9 100644
+index f609c68..13e6ba2 100644
 --- a/src/framegen.cpp
 +++ b/src/framegen.cpp
 @@ -6,21 +6,29 @@
@@ -612,7 +617,7 @@ index f609c68..477c9a9 100644
  
  #if NATIVE_X_RENDERER_FSR
  #include "ffx_api.h"
-@@ -28,13 +36,88 @@
+@@ -28,13 +36,121 @@
  #include "vk/ffx_api_vk.h"
  #endif
  
@@ -660,6 +665,39 @@ index f609c68..477c9a9 100644
 +#if NATIVE_X_RENDERER_DLSS
 +constexpr const char* kNgxProjectId = "750fed3a-efba-42ba-801b-22d4cbad9148";
 +
++struct NgxVkProcs {
++  PFN_vkCreateCommandPool create_command_pool = nullptr;
++  PFN_vkDestroyCommandPool destroy_command_pool = nullptr;
++  PFN_vkAllocateCommandBuffers allocate_command_buffers = nullptr;
++  PFN_vkFreeCommandBuffers free_command_buffers = nullptr;
++  PFN_vkBeginCommandBuffer begin_command_buffer = nullptr;
++  PFN_vkEndCommandBuffer end_command_buffer = nullptr;
++  PFN_vkResetCommandBuffer reset_command_buffer = nullptr;
++  PFN_vkCreateFence create_fence = nullptr;
++  PFN_vkDestroyFence destroy_fence = nullptr;
++
++  bool Load(VkDevice device) {
++    if (create_command_pool) return true;
++    HMODULE vulkan = GetModuleHandleW(L"vulkan-1.dll");
++    if (!vulkan) vulkan = LoadLibraryW(L"vulkan-1.dll");
++    auto get_proc =
++        vulkan ? reinterpret_cast<PFN_vkGetDeviceProcAddr>(GetProcAddress(vulkan, "vkGetDeviceProcAddr")) : nullptr;
++    if (!get_proc || !device) return false;
++    create_command_pool = reinterpret_cast<PFN_vkCreateCommandPool>(get_proc(device, "vkCreateCommandPool"));
++    destroy_command_pool = reinterpret_cast<PFN_vkDestroyCommandPool>(get_proc(device, "vkDestroyCommandPool"));
++    allocate_command_buffers =
++        reinterpret_cast<PFN_vkAllocateCommandBuffers>(get_proc(device, "vkAllocateCommandBuffers"));
++    free_command_buffers = reinterpret_cast<PFN_vkFreeCommandBuffers>(get_proc(device, "vkFreeCommandBuffers"));
++    begin_command_buffer = reinterpret_cast<PFN_vkBeginCommandBuffer>(get_proc(device, "vkBeginCommandBuffer"));
++    end_command_buffer = reinterpret_cast<PFN_vkEndCommandBuffer>(get_proc(device, "vkEndCommandBuffer"));
++    reset_command_buffer = reinterpret_cast<PFN_vkResetCommandBuffer>(get_proc(device, "vkResetCommandBuffer"));
++    create_fence = reinterpret_cast<PFN_vkCreateFence>(get_proc(device, "vkCreateFence"));
++    destroy_fence = reinterpret_cast<PFN_vkDestroyFence>(get_proc(device, "vkDestroyFence"));
++    return create_command_pool && destroy_command_pool && allocate_command_buffers && free_command_buffers &&
++           begin_command_buffer && end_command_buffer && reset_command_buffer && create_fence && destroy_fence;
++  }
++} g_ngx_vk;
++
 +std::string NarrowNgxResult(NVSDK_NGX_Result result) {
 +  const wchar_t* wide = GetNGXResultAsString(result);
 +  std::string text = WideToAscii(wide);
@@ -702,7 +740,7 @@ index f609c68..477c9a9 100644
  // The loader's vkGetDeviceProcAddr, with the core function where the device did not enable the extension FidelityFX
  // asks a function by (as fsr.cpp).
  PFN_vkGetDeviceProcAddr g_get_device_proc_addr = nullptr;
-@@ -57,8 +140,7 @@ PFN_vkVoidFunction VKAPI_CALL DeviceProcAddr(VkDevice device, const char* name)
+@@ -57,8 +173,7 @@ PFN_vkVoidFunction VKAPI_CALL DeviceProcAddr(VkDevice device, const char* name)
  void Message(uint32_t type, const wchar_t* message) {
    static std::atomic<uint32_t> count{0};
    if (count.fetch_add(1) >= 32) return;
@@ -712,7 +750,7 @@ index f609c68..477c9a9 100644
    if (type == FFX_API_MESSAGE_TYPE_ERROR) {
      REXLOG_ERROR("[native_x_renderer] frame generation: {}", text);
    } else {
-@@ -91,18 +173,116 @@ FfxApiResource Resource(ITexture* texture, uint32_t state, bool unordered_access
+@@ -91,18 +206,117 @@ FfxApiResource Resource(ITexture* texture, uint32_t state, bool unordered_access
    VkImage image = texture_vk ? texture_vk->GetVkImage() : VK_NULL_HANDLE;
    return ffxApiGetResourceVK(reinterpret_cast<void*>(image), description, state);
  }
@@ -769,7 +807,8 @@ index f609c68..477c9a9 100644
 +    }
 +    NVSDK_NGX_Result init_result = NVSDK_NGX_VULKAN_Init_with_ProjectID(
 +        kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "0", L".", device_vk->GetVkInstance(),
-+        device_vk->GetVkPhysicalDevice(), device_vk->GetVkDevice(), nullptr, nullptr, &common_info);
++        device_vk->GetVkPhysicalDevice(), device_vk->GetVkDevice(), nullptr, nullptr,
++        folder.empty() ? nullptr : &common_info);
 +    if (NVSDK_NGX_FAILED(init_result)) {
 +      REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA NGX Vulkan init failed ({}: 0x{:08X})",
 +                  NarrowNgxResult(init_result), uint32_t(init_result));
@@ -835,7 +874,7 @@ index f609c68..477c9a9 100644
    HMODULE module = LoadLibraryW((folder + L"amd_fidelityfx_vk.dll").c_str());
    if (!module) {
      REXLOG_WARN("[native_x_renderer] frame generation: amd_fidelityfx_vk.dll is not next to the game's executable");
-@@ -126,11 +306,43 @@ bool FrameGeneration::Load(IRenderDevice* device) {
+@@ -126,11 +340,43 @@ bool FrameGeneration::Load(IRenderDevice* device) {
    module_ = module;
    return true;
  #else
@@ -880,7 +919,7 @@ index f609c68..477c9a9 100644
  bool FrameGeneration::CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width,
                                      uint32_t render_height) {
  #if NATIVE_X_RENDERER_FSR
-@@ -192,20 +404,158 @@ void FrameGeneration::DestroyContext() {
+@@ -192,20 +438,265 @@ void FrameGeneration::DestroyContext() {
  #if NATIVE_X_RENDERER_FSR
    if (!context_) return;
    // Its textures may still be in use by frames in flight.
@@ -892,18 +931,130 @@ index f609c68..477c9a9 100644
  #endif
  }
  
++bool FrameGeneration::EnsureNvidiaCommandResources(IDeviceContext* context) {
++#if NATIVE_X_RENDERER_DLSS
++  if (!device_ || !context) return false;
++  RefCntAutoPtr<IRenderDeviceVk> device_vk(device_, IID_RenderDeviceVk);
++  VkDevice vk_device = device_vk ? device_vk->GetVkDevice() : VK_NULL_HANDLE;
++  if (!vk_device || !g_ngx_vk.Load(vk_device)) return false;
++
++  if (ngx_cmd_pool_ && ngx_cmd_buf_ && ngx_fence_) {
++    if (!ngx_cmd_recording_) {
++      VkCommandBuffer cmd_buf = static_cast<VkCommandBuffer>(ngx_cmd_buf_);
++      if (g_ngx_vk.reset_command_buffer(cmd_buf, 0) != VK_SUCCESS) return false;
++      VkCommandBufferBeginInfo begin_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++      begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++      if (g_ngx_vk.begin_command_buffer(cmd_buf, &begin_info) != VK_SUCCESS) return false;
++      ngx_cmd_recording_ = true;
++    }
++    return true;
++  }
++
++  DestroyNvidiaCommandResources();
++  uint32_t queue_family_index = 0;
++  bool have_queue = false;
++  if (ICommandQueue* cmd_queue = context->LockCommandQueue()) {
++    RefCntAutoPtr<ICommandQueueVk> cmd_queue_vk(cmd_queue, IID_CommandQueueVk);
++    if (cmd_queue_vk) {
++      queue_family_index = cmd_queue_vk->GetQueueFamilyIndex();
++      have_queue = true;
++    }
++    context->UnlockCommandQueue();
++  }
++  if (!have_queue) return false;
++
++  VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
++  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
++  pool_info.queueFamilyIndex = queue_family_index;
++  VkCommandPool pool = VK_NULL_HANDLE;
++  if (g_ngx_vk.create_command_pool(vk_device, &pool_info, nullptr, &pool) != VK_SUCCESS || !pool) return false;
++  ngx_cmd_pool_ = pool;
++
++  VkCommandBufferAllocateInfo alloc_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
++  alloc_info.commandPool = pool;
++  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++  alloc_info.commandBufferCount = 1;
++  VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
++  if (g_ngx_vk.allocate_command_buffers(vk_device, &alloc_info, &cmd_buf) != VK_SUCCESS || !cmd_buf) {
++    DestroyNvidiaCommandResources();
++    return false;
++  }
++  ngx_cmd_buf_ = cmd_buf;
++
++  VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
++  VkFence fence = VK_NULL_HANDLE;
++  if (g_ngx_vk.create_fence(vk_device, &fence_info, nullptr, &fence) != VK_SUCCESS || !fence) {
++    DestroyNvidiaCommandResources();
++    return false;
++  }
++  ngx_fence_ = fence;
++
++  VkCommandBufferBeginInfo begin_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++  begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++  if (g_ngx_vk.begin_command_buffer(cmd_buf, &begin_info) != VK_SUCCESS) {
++    DestroyNvidiaCommandResources();
++    return false;
++  }
++  ngx_cmd_recording_ = true;
++  return true;
++#else
++  (void)context;
++  return false;
++#endif
++}
++
++void FrameGeneration::DestroyNvidiaCommandResources() {
++#if NATIVE_X_RENDERER_DLSS
++  RefCntAutoPtr<IRenderDeviceVk> device_vk(device_, IID_RenderDeviceVk);
++  VkDevice vk_device = device_vk ? device_vk->GetVkDevice() : VK_NULL_HANDLE;
++  if (vk_device && g_ngx_vk.Load(vk_device)) {
++    if (ngx_cmd_buf_ && ngx_cmd_pool_) {
++      VkCommandBuffer cmd_buf = static_cast<VkCommandBuffer>(ngx_cmd_buf_);
++      g_ngx_vk.free_command_buffers(vk_device, static_cast<VkCommandPool>(ngx_cmd_pool_), 1, &cmd_buf);
++    }
++    if (ngx_cmd_pool_) {
++      g_ngx_vk.destroy_command_pool(vk_device, static_cast<VkCommandPool>(ngx_cmd_pool_), nullptr);
++    }
++    if (ngx_fence_) {
++      g_ngx_vk.destroy_fence(vk_device, static_cast<VkFence>(ngx_fence_), nullptr);
++    }
++  }
++  ngx_cmd_buf_ = nullptr;
++  ngx_cmd_pool_ = nullptr;
++  ngx_fence_ = nullptr;
++  ngx_cmd_recording_ = false;
++#endif
++}
++
 +bool FrameGeneration::CreateNvidiaFeature(IDeviceContext* context, uint32_t display_width, uint32_t display_height,
 +                                          uint32_t render_width, uint32_t render_height, uint32_t vk_format) {
 +#if NATIVE_X_RENDERER_DLSS
-+  DestroyNvidiaFeature();
++  if (ngx_handle_ || ngx_cmd_pool_ || ngx_fence_) {
++    if (context) context->Flush();
++    DestroyNvidiaFeature();
++  }
 +  if (!ngx_params_ || !context) return false;
-+  RefCntAutoPtr<IDeviceContextVk> context_vk(context, IID_DeviceContextVk);
-+  if (!context_vk) return false;
++  if (!EnsureNvidiaCommandResources(context)) return false;
++
++  VkQueue vk_queue = VK_NULL_HANDLE;
++  if (ICommandQueue* cmd_queue = context->LockCommandQueue()) {
++    RefCntAutoPtr<ICommandQueueVk> cmd_queue_vk(cmd_queue, IID_CommandQueueVk);
++    if (cmd_queue_vk) vk_queue = cmd_queue_vk->GetVkQueue();
++    context->UnlockCommandQueue();
++  }
++  if (!vk_queue) {
++    DestroyNvidiaCommandResources();
++    return false;
++  }
 +
 +  auto* params = static_cast<NVSDK_NGX_Parameter*>(ngx_params_);
 +  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_InternalWidth, render_width);
 +  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_InternalHeight, render_height);
 +  NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_DynamicResolution, 0u);
++  NVSDK_NGX_Parameter_SetVoidPointer(params, "DLSSG.CmdQueue", static_cast<void*>(vk_queue));
++  NVSDK_NGX_Parameter_SetVoidPointer(params, "DLSSG.CmdAlloc", ngx_cmd_pool_);
++  NVSDK_NGX_Parameter_SetVoidPointer(params, "DLSSG.FenceEvent", ngx_fence_);
++  NVSDK_NGX_Parameter_SetUI(params, "DLSSG.IsRecording", 1u);
 +
 +  NVSDK_NGX_DLSSG_Create_Params create_params{};
 +  create_params.Width = display_width;
@@ -914,13 +1065,14 @@ index f609c68..477c9a9 100644
 +  create_params.DynamicResolutionScaling = false;
 +
 +  NVSDK_NGX_Handle* handle = nullptr;
-+  NVSDK_NGX_Result result =
-+      NGX_VK_CREATE_DLSSG(context_vk->GetVkCommandBuffer(), 1, 1, &handle, params, &create_params);
-+  context->InvalidateState();
++  NVSDK_NGX_Result result = NGX_VK_CREATE_DLSSG(
++      static_cast<VkCommandBuffer>(ngx_cmd_buf_), 1, 1, &handle, params, &create_params);
 +  if (NVSDK_NGX_FAILED(result) || !handle) {
 +    REXLOG_WARN("[native_x_renderer] frame generation: NVIDIA DLSS-G feature creation failed for {}x{} -> {}x{} "
 +                "({}: 0x{:08X})",
 +                render_width, render_height, display_width, display_height, NarrowNgxResult(result), uint32_t(result));
++    if (device_) device_->IdleGPU();
++    DestroyNvidiaCommandResources();
 +    return false;
 +  }
 +  ngx_handle_ = handle;
@@ -949,11 +1101,15 @@ index f609c68..477c9a9 100644
 +
 +void FrameGeneration::DestroyNvidiaFeature() {
 +#if NATIVE_X_RENDERER_DLSS
-+  if (!ngx_handle_) return;
++  if (!ngx_handle_ && !ngx_cmd_pool_ && !ngx_fence_) return;
 +  if (device_) device_->IdleGPU();
-+  NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(ngx_handle_));
-+  ngx_handle_ = nullptr;
++  if (ngx_handle_) {
++    NVSDK_NGX_VULKAN_ReleaseFeature(static_cast<NVSDK_NGX_Handle*>(ngx_handle_));
++    ngx_handle_ = nullptr;
++  }
++  DestroyNvidiaCommandResources();
 +  ngx_backbuffer_format_ = 0;
++  context_size_[0] = context_size_[1] = context_size_[2] = context_size_[3] = 0;
 +#endif
 +}
 +
@@ -976,9 +1132,10 @@ index f609c68..477c9a9 100644
 +#if NATIVE_X_RENDERER_DLSS
 +  ShutdownNvidia();
 +  logged_version_ = false;
++  last_generated_ = false;
 +  if (requested_provider_ == Provider::kAuto) {
 +    REXLOG_WARN("[native_x_renderer] frame generation: falling back to AMD FidelityFX after NVIDIA DLSS-G "
-+                "feature creation failed (provider=auto, D142)");
++                "failed (provider=auto, D142)");
 +    if (LoadAmd()) {
 +      active_provider_ = Provider::kAmd;
 +      return true;
@@ -1018,22 +1175,11 @@ index f609c68..477c9a9 100644
 +
 +#if NATIVE_X_RENDERER_DLSS
 +  if (active_provider_ == Provider::kNvidia) {
-+    const uint32_t vk_format = uint32_t(VK_FORMAT_R8G8B8A8_UNORM);
-+    if (!ngx_handle_ || context_size_[0] != display_width || context_size_[1] != display_height ||
-+        context_size_[2] != depth.Width || context_size_[3] != depth.Height || ngx_backbuffer_format_ != vk_format) {
-+      if (!CreateNvidiaFeature(context, display_width, display_height, depth.Width, depth.Height, vk_format)) {
-+        if (!FallbackAfterNvidiaFailure()) return;
-+      } else {
-+        reset = true;
-+        last_generated_ = false;
-+      }
-+    }
-+    if (active_provider_ == Provider::kNvidia) {
-+      prepared_view_ = view;
-+      prepared_ = true;
-+      reset_ = reset;
-+      return;
-+    }
++    if (pending_nvidia_fallback_) return;
++    prepared_view_ = view;
++    prepared_ = true;
++    reset_ = reset;
++    return;
 +  }
 +#endif
 +
@@ -1042,7 +1188,7 @@ index f609c68..477c9a9 100644
    if (!context_ || context_size_[0] != display_width || context_size_[1] != display_height ||
        context_size_[2] != depth.Width || context_size_[3] != depth.Height) {
      if (!CreateContext(display_width, display_height, depth.Width, depth.Height)) return;
-@@ -258,9 +608,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
+@@ -258,9 +749,7 @@ void FrameGeneration::Prepare(IDeviceContext* context, const View& view, uint32_
    reset_ = reset;
  #else
    (void)context;
@@ -1053,7 +1199,7 @@ index f609c68..477c9a9 100644
  #endif
  }
  
-@@ -268,28 +616,142 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -268,28 +757,160 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
                                 const int32_t area[4]) {
    bool prepared = prepared_;
    prepared_ = false;
@@ -1063,8 +1209,8 @@ index f609c68..477c9a9 100644
 +
 +#if NATIVE_X_RENDERER_DLSS
 +  if (active_provider_ == Provider::kNvidia) {
-+    if (!ngx_handle_ || !ngx_params_ || !prepared || !desc || desc->Width != context_size_[0] ||
-+        desc->Height != context_size_[1] || !prepared_view_.depth || !prepared_view_.motion) {
++    if (pending_nvidia_fallback_ || !ngx_params_ || !prepared || !desc || !prepared_view_.depth ||
++        !prepared_view_.motion) {
 +      last_generated_ = false;
 +      ++stats_.skipped;
 +      return false;
@@ -1075,10 +1221,12 @@ index f609c68..477c9a9 100644
 +      ++stats_.skipped;
 +      return false;
 +    }
-+    if (ngx_backbuffer_format_ != vk_format) {
-+      const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
++    const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
++    if (!ngx_handle_ || context_size_[0] != desc->Width || context_size_[1] != desc->Height ||
++        context_size_[2] != depth_desc.Width || context_size_[3] != depth_desc.Height ||
++        ngx_backbuffer_format_ != vk_format) {
 +      if (!CreateNvidiaFeature(context, desc->Width, desc->Height, depth_desc.Width, depth_desc.Height, vk_format)) {
-+        FallbackAfterNvidiaFailure();
++        pending_nvidia_fallback_ = true;
 +        last_generated_ = false;
 +        ++stats_.skipped;
 +        return false;
@@ -1086,7 +1234,13 @@ index f609c68..477c9a9 100644
 +      reset_ = true;
 +      last_generated_ = false;
 +    }
-+    if (!EnsureOutputTexture(desc->Width, desc->Height, desc->Format)) {
++    if (!EnsureOutputTexture(desc->Width, desc->Height, desc->Format) || !EnsureNvidiaCommandResources(context)) {
++      last_generated_ = false;
++      ++stats_.skipped;
++      return false;
++    }
++    RefCntAutoPtr<IDeviceContextVk> context_vk(context, IID_DeviceContextVk);
++    if (!context_vk) {
 +      last_generated_ = false;
 +      ++stats_.skipped;
 +      return false;
@@ -1102,12 +1256,8 @@ index f609c68..477c9a9 100644
 +        {hudless, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE, STATE_TRANSITION_FLAG_UPDATE_STATE},
 +    };
 +    context->TransitionResourceStates(hudless ? 5u : 4u, barriers);
-+    RefCntAutoPtr<IDeviceContextVk> context_vk(context, IID_DeviceContextVk);
-+    if (!context_vk) {
-+      last_generated_ = false;
-+      ++stats_.skipped;
-+      return false;
-+    }
++    context_vk->GetVkCommandBuffer();
++    context->Flush();
 +
 +    NVSDK_NGX_Resource_VK backbuffer_res = MakeNgxImageResource(current, false);
 +    NVSDK_NGX_Resource_VK depth_res = MakeNgxImageResource(prepared_view_.depth, false);
@@ -1122,7 +1272,6 @@ index f609c68..477c9a9 100644
 +    eval.pHudless = hudless ? &hudless_res : nullptr;
 +    eval.pOutputInterpFrame = &output_res;
 +
-+    const TextureDesc& depth_desc = prepared_view_.depth->GetDesc();
 +    const TextureDesc& motion_desc = prepared_view_.motion->GetDesc();
 +    bool reset = reset_ || !last_generated_;
 +
@@ -1159,17 +1308,32 @@ index f609c68..477c9a9 100644
 +    opt.depthSubrectBase = {0, 0};
 +    opt.depthSubrectSize = {depth_desc.Width, depth_desc.Height};
 +
-+    NVSDK_NGX_Result result = NGX_VK_EVALUATE_DLSSG(
-+        context_vk->GetVkCommandBuffer(), static_cast<NVSDK_NGX_Handle*>(ngx_handle_),
-+        static_cast<NVSDK_NGX_Parameter*>(ngx_params_), &eval, &opt);
-+    context->InvalidateState();
++    VkQueue vk_queue = VK_NULL_HANDLE;
++    ICommandQueue* cmd_queue = context->LockCommandQueue();
++    if (cmd_queue) {
++      RefCntAutoPtr<ICommandQueueVk> cmd_queue_vk(cmd_queue, IID_CommandQueueVk);
++      if (cmd_queue_vk) vk_queue = cmd_queue_vk->GetVkQueue();
++    }
++    auto* eval_params = static_cast<NVSDK_NGX_Parameter*>(ngx_params_);
++    NVSDK_NGX_Parameter_SetVoidPointer(eval_params, "DLSSG.CmdQueue", static_cast<void*>(vk_queue));
++    NVSDK_NGX_Parameter_SetVoidPointer(eval_params, "DLSSG.CmdAlloc", ngx_cmd_pool_);
++    NVSDK_NGX_Parameter_SetVoidPointer(eval_params, "DLSSG.FenceEvent", ngx_fence_);
++    NVSDK_NGX_Parameter_SetUI(eval_params, "DLSSG.IsRecording", 1u);
++
++    NVSDK_NGX_Result result = NGX_VK_EVALUATE_DLSSG(static_cast<VkCommandBuffer>(ngx_cmd_buf_),
++                                                    static_cast<NVSDK_NGX_Handle*>(ngx_handle_), eval_params, &eval,
++                                                    &opt);
++    unsigned int is_recording = 1u;
++    NVSDK_NGX_Parameter_GetUI(eval_params, "DLSSG.IsRecording", &is_recording);
++    ngx_cmd_recording_ = (is_recording != 0u);
++    if (cmd_queue) context->UnlockCommandQueue();
 +    if (NVSDK_NGX_FAILED(result)) {
-+      static bool logged = false;
-+      if (!logged) {
-+        logged = true;
++      if (!nvidia_eval_failed_) {
++        nvidia_eval_failed_ = true;
 +        REXLOG_ERROR("[native_x_renderer] frame generation: NVIDIA DLSS-G evaluate failed ({}: 0x{:08X})",
 +                     NarrowNgxResult(result), uint32_t(result));
 +      }
++      pending_nvidia_fallback_ = true;
 +      last_generated_ = false;
 +      ++stats_.skipped;
 +      return false;
@@ -1213,7 +1377,7 @@ index f609c68..477c9a9 100644
    }
    FfxApiRect2D rect{area[0], area[1], area[2], area[3]};
    ffxConfigureDescFrameGeneration configure{};
-@@ -352,6 +814,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -352,6 +973,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
    (void)hudless;
    (void)area;
    (void)prepared;
@@ -1221,16 +1385,22 @@ index f609c68..477c9a9 100644
    return false;
  #endif
  }
-@@ -359,6 +822,7 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
+@@ -359,6 +981,13 @@ bool FrameGeneration::Generate(IDeviceContext* context, ITexture* current, IText
  void FrameGeneration::EndFrame() {
    ++frame_id_;
    prepared_ = false;
 +  prepared_view_ = {};
++#if NATIVE_X_RENDERER_DLSS
++  if (pending_nvidia_fallback_) {
++    pending_nvidia_fallback_ = false;
++    FallbackAfterNvidiaFailure();
++  }
++#endif
  }
  
  }  // namespace native_x_renderer
 diff --git a/src/framegen.h b/src/framegen.h
-index ab4bed3..d9ea8a4 100644
+index ab4bed3..a1fc930 100644
 --- a/src/framegen.h
 +++ b/src/framegen.h
 @@ -1,16 +1,15 @@
@@ -1292,7 +1462,7 @@ index ab4bed3..d9ea8a4 100644
    void Prepare(Diligent::IDeviceContext* context, const View& view, uint32_t display_width, uint32_t display_height);
  
    // At Present, the frame composed into `current` (the window's size, RGBA8_UNORM): the frame between the last one
-@@ -60,10 +73,21 @@ class FrameGeneration {
+@@ -60,10 +73,23 @@ class FrameGeneration {
    }
  
   private:
@@ -1300,6 +1470,8 @@ index ab4bed3..d9ea8a4 100644
 +  bool LoadAmd();
    bool CreateContext(uint32_t display_width, uint32_t display_height, uint32_t render_width, uint32_t render_height);
    void DestroyContext();
++  bool EnsureNvidiaCommandResources(Diligent::IDeviceContext* context);
++  void DestroyNvidiaCommandResources();
 +  bool CreateNvidiaFeature(Diligent::IDeviceContext* context, uint32_t display_width, uint32_t display_height,
 +                           uint32_t render_width, uint32_t render_height, uint32_t vk_format);
 +  void DestroyNvidiaFeature();
@@ -1314,14 +1486,20 @@ index ab4bed3..d9ea8a4 100644
    void* module_ = nullptr;  // amd_fidelityfx_vk.dll (never unloaded)
    void* create_context_ = nullptr;
    void* destroy_context_ = nullptr;
-@@ -71,13 +95,20 @@ class FrameGeneration {
+@@ -71,13 +97,26 @@ class FrameGeneration {
    void* dispatch_ = nullptr;
    void* query_ = nullptr;
    void* context_ = nullptr;  // ffxContext
 +
-+  void* ngx_params_ = nullptr;   // NVSDK_NGX_Parameter*
-+  void* ngx_handle_ = nullptr;   // NVSDK_NGX_Handle*
-+  bool ngx_owns_init_ = false;   // true when FrameGeneration called NVSDK_NGX_VULKAN_Init_with_ProjectID itself
++  void* ngx_params_ = nullptr;    // NVSDK_NGX_Parameter*
++  void* ngx_handle_ = nullptr;    // NVSDK_NGX_Handle*
++  void* ngx_cmd_pool_ = nullptr;  // VkCommandPool
++  void* ngx_cmd_buf_ = nullptr;   // VkCommandBuffer
++  void* ngx_fence_ = nullptr;     // VkFence
++  bool ngx_cmd_recording_ = false;
++  bool ngx_owns_init_ = false;  // true when FrameGeneration called NVSDK_NGX_VULKAN_Init_with_ProjectID itself
++  bool pending_nvidia_fallback_ = false;
++  bool nvidia_eval_failed_ = false;
 +  uint32_t ngx_backbuffer_format_ = 0;
 +  View prepared_view_{};
 +
@@ -1337,7 +1515,7 @@ index ab4bed3..d9ea8a4 100644
    Diligent::ITextureView* output_srv_ = nullptr;
    Stats stats_;
 diff --git a/src/renderer.cpp b/src/renderer.cpp
-index 0c26d52..497fd64 100644
+index 0c26d52..1942d29 100644
 --- a/src/renderer.cpp
 +++ b/src/renderer.cpp
 @@ -81,9 +81,13 @@ REXCVAR_DEFINE_STRING(native_x_renderer_views, "", "NativeXRenderer",
@@ -1440,7 +1618,15 @@ index 0c26d52..497fd64 100644
      // Frame generation's inputs (D123), prepared at Present.
      if (upscaled && g_frame_generation && g_upscaler.frame_inputs().depth) {
        g_frame_inputs = g_upscaler.frame_inputs();
-@@ -1406,6 +1450,42 @@ void ExecutePresent(const Command& c) {
+@@ -1330,6 +1374,7 @@ bool PresentWithGeneratedFrame(const Command& c) {
+     if (ms < 100.0) g_game_frame_ms += (ms - g_game_frame_ms) * 0.1;
+   }
+   g_last_game_frame = now;
++  g_timer.End(context);
+   bool generated = g_framegen.Generate(context, g_frame_generation_image.texture,
+                                        g_hudless_this_frame ? g_hudless_image.texture.RawPtr() : nullptr,
+                                        g_present_area);
+@@ -1406,6 +1451,42 @@ void ExecutePresent(const Command& c) {
    g_view_ended = false;
    g_auto_view_done = false;
    g_scene_antialiased = false;
@@ -1483,7 +1669,7 @@ index 0c26d52..497fd64 100644
    if (g_temporal) g_upscaler.NextFrame();
    if (!g_device->UpdateSize()) {
      // Minimized: the frame drawn but not shown is still ended (D125). Returning without it left every frame's work
-@@ -1828,16 +1908,26 @@ bool Initialize(const Profile& profile, rex::system::IGraphicsSystem* graphics,
+@@ -1828,16 +1909,26 @@ bool Initialize(const Profile& profile, rex::system::IGraphicsSystem* graphics,
                    : g_camera_vote ? "; the camera's motion from a vote of the main view's draws (D118)"
                                    : "");
      }

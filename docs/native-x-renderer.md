@@ -218,16 +218,25 @@ frame between each two of the game's, with V-Sync (D123, D142)` (`requested "aut
 fallback) and `frame generation (D123): 0 frames generated, 1 game frames without one; the game's frames 16.70 ms apart`; no FATAL or `[error]`.
 
 In a song (interactive desktop, RTX 4070 Ti, `--ghworldtour_frame_rate=120`): AMD FSR 3.1 frame generation
-(`provider=amd`) generated frames for 18,000 frames, while NVIDIA DLSS-G (`provider=auto`) logged an `[error]` at
-its first evaluate and generated none; both are in "Interactive verification".
+(`provider=amd`) generated frames for 18,000 frames (`ghworldtour_128.log`), while the pre-fix NVIDIA DLSS-G run
+(`provider=auto`, `ghworldtour_127.log`) logged `0xBAD00005` at its first evaluate because standalone NGX Vulkan
+requires `DLSSG.CmdQueue`, `DLSSG.CmdAlloc` (`VkCommandPool`), `DLSSG.FenceEvent`, and `DLSSG.IsRecording`; both runs
+are in "Interactive verification". After supplying those parameters on a dedicated NGX `VkCommandPool`/`VkCommandBuffer`/`VkFence`
+and deferring `FallbackAfterNvidiaFailure()` to `EndFrame()` (after `Present()`), unattended attract-mode runs on the
+RTX 4070 Ti verified NVIDIA DLSS-G generating frames (`ghworldtour_140.log` with `fsr_native` + `provider=nvidia`: 99
+frames generated at `frame 15000`; `ghworldtour_142.log` and `ghworldtour_145.log` with `dlaa` + `provider=auto`:
+`NVIDIA DLSS-G frame interpolation, the view 1280x720, the picture 1280x720 (D142)`, 97 and 83 frames generated at
+`frame 15000`, 0 `[error]`) as well as the deferred evaluate-failure fallback (`ghworldtour_143.log` with a temporary
+simulated evaluate failure under `provider=auto`: `falling back to AMD FidelityFX after NVIDIA DLSS-G failed (provider=auto, D142)` →
+`AMD's 1.1.3 frame interpolation`, 91 frames generated at `frame 15000`; `ghworldtour_144.log` under `provider=nvidia`:
+logged once, transitioned to `off` with 0 frames generated and no AMD fallback). The user subsequently confirmed
+interactively that post-fix NVIDIA DLSS-G works (no captured log exists for that interactive run).
 
-Not verified: whether `AdjustHighwayMotion` matches the highway draws (no log line reports it; the run logs
-only the 2D layer's motion, `ghworldtour_128.log`: `26929 draws, 26909 matched with the last frame's` at frame 18000),
-how 120 FPS pacing feels (the logs give the game's frame spacing, 16.59-17.55 ms), NVIDIA DLSS-G producing a
-frame, and the `provider=auto` fallback to AMD after an NVIDIA failure (`FallbackAfterNvidiaFailure()` runs when
-`CreateNvidiaFeature` fails, not when `NGX_VK_EVALUATE_DLSSG` fails: `patches/native_x_renderer-dlssg-and-depth-upscale.patch`
-lines 1025, 1081 and 1166-1176). The launcher's frame generation row stays off
-(`kFrameGenerationRow`, in the launcher submodule): the option is reached with `--native_x_renderer_frame_generation=true`.
+Not verified: whether `AdjustHighwayMotion` matches the highway draws (no log line reports it; the run logs only the 2D
+layer's motion, `ghworldtour_128.log`: `26929 draws, 26909 matched with the last frame's` at frame 18000), and how 120
+FPS pacing feels on an interactive desktop (the logs give the game's frame spacing, 16.59-17.55 ms). The launcher's
+frame generation row stays off (`kFrameGenerationRow`, in the launcher submodule): the option is reached with
+`--native_x_renderer_frame_generation=true`.
 
 ## Interactive verification (2026-11-18)
 
@@ -276,13 +285,15 @@ sampled intervals (31 samples per log, 677-691 draw calls at most). Run-specific
   `4-song-review.png` (highway and notes) show no tearing or doubled notes in the stills; `3-confirm-6-review.png` is the
   House of Blues venue intro (band, crowd, stage lights, no highway). Motion quality
   cannot be judged from stills.
-- **#11, NVIDIA DLSS-G in a song (`ghworldtour_127.log`).** Not working: `NGX_VK_CREATE_DLSSG` passes (`frame
-  generation: NVIDIA DLSS-G frame interpolation, the view 1280x720, the picture 1280x720 (D142)` at 23:34:40.253) and
-  `NGX_VK_EVALUATE_DLSSG` fails once (`[error] ... 0xBAD00005` at 23:34:40.263, logged once by design); frame
-  generation stays off for 18,000 frames, with DLAA still applied on 600 of 600 frames and the picture intact
-  (`3-confirm-6-review.png`, `4-song-review.png`). `provider=auto` stayed on NVIDIA, as the fallback only covers a
-  failed feature creation. `nvngx_dlssg.dll` is not in `out/build/win-amd64-release` (only `nvngx_dlss.dll` and
-  `amd_fidelityfx_vk.dll` are); whether the DLL's absence is the cause was not tested.
+- **#11, NVIDIA DLSS-G in a song (`ghworldtour_127.log`, pre-fix 2026-11-18 run).** In that run, `NGX_VK_CREATE_DLSSG`
+  passed (`frame generation: NVIDIA DLSS-G frame interpolation, the view 1280x720, the picture 1280x720 (D142)` at
+  23:34:40.253) and `NGX_VK_EVALUATE_DLSSG` failed once (`[error] ... 0xBAD00005` at 23:34:40.263, logged once by
+  design); frame generation stayed off for 18,000 frames, with DLAA still applied on 600 of 600 frames and the picture
+  intact (`3-confirm-6-review.png`, `4-song-review.png`), and `provider=auto` stayed on NVIDIA because the fallback at
+  the time only covered a failed feature creation. NGX loads `nvngx_dlssg.dll` (`310.2.1.0`) from the NVIDIA display
+  driver store; the `0xBAD00005` evaluate failure and the post-`Present()` `provider=auto` fallback to AMD FidelityFX
+  were subsequently fixed in `framegen.cpp`, verified in attract mode (`ghworldtour_140.log`, `ghworldtour_142.log`–`145.log`
+  above), and confirmed interactively by the user (no captured log for that interactive run).
 - **Non-RTX GPUs (#11).** A GTX, AMD or Intel GPU was not available: every run above is on the RTX 4070 Ti
   (`vendorID 0x10DE`). What these runs add for such cards is AMD FSR 3.1 upscaling (`ghworldtour_126.log`) and AMD
   FSR 3.1 frame generation (`ghworldtour_128.log`) working in a song with `provider=amd` on this card; the card-side
