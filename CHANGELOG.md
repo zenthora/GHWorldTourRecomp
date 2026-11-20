@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 <!-- git-cliff: end of header -->
 
+## [0.2.0] - 2026-11-20
+
+### 🐛 Bug Fixes
+
+- *(release)* Handle git-cliff and gh stderr in package-release.ps1
+- *(patch)* Stop per-frame DLSS-G retry spam and index D140-D142
+- *(release)* Conditionally stage nvngx_dlssg.dll when present
+- *(cmake)* Harden idempotent patching and document SDK isolation
+- Address code review findings on release-readiness
+- *(patch)* Fix DLSS-G evaluate 0xBAD00005 and add AMD fallback
+
+### 📚 Documentation
+
+- *(readme)* Explain project motivation in intro
+- Update LICENSE scope and THIRD_PARTY_NOTICES.md for DLSS/DLSS-G
+- Update README status, 120 FPS / DLSS docs, and layout
+- Record interactive renderer verification and A/B comparison
+- Correct verification details after audit
+
+### ⚙️ Miscellaneous Tasks
+
+- Integrate #7 DLSS-G patch cleanup
+- Integrate #13 license and third-party notices
+- Integrate #15 release bundle nvngx_dlssg staging
+- Integrate #14 CMake patch idempotency and SDK docs
+- Integrate #16 README release-readiness update
+- Integrate code review fixes on release-readiness
 ## [0.1.0] - 2026-11-16
 
 ### 🚀 Features
