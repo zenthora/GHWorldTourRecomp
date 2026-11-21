@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-The game can render through either the SDK's Xenos GPU emulation (`rexgpu-xenos`) or `NativeXRenderer` (Direct3D 12 / Vulkan via DiligentCore). Standalone executable defaults still initialize Xenos unless overridden, whereas the launcher configures the player-facing experience via `ghworldtour_options.toml`.
+The game can render through either the SDK's Xenos GPU emulation (`rexgpu-xenos`, Direct3D 12 by default or Vulkan) or `NativeXRenderer` (Vulkan via DiligentCore). Standalone executable defaults still initialize Xenos unless overridden, whereas the launcher configures the player-facing experience via `ghworldtour_options.toml`.
 
 ## Decision
 

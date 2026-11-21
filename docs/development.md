@@ -12,23 +12,27 @@ The launcher draws it with [NativeXRenderer](https://github.com/ElGuslml/NativeX
 - Git, [CMake](https://cmake.org/) 3.25 or newer, [Ninja](https://ninja-build.org/),
   [LLVM/Clang](https://github.com/llvm/llvm-project/releases) (MSVC alone does not build this), the Windows SDK and
   Python 3.
-- Your own copy of the game: extract the content of your disc or ISO with
+- Your own **USA** copy of the game: extract the content of your disc or ISO with
   [extract-xiso](https://github.com/XboxDev/extract-xiso/releases) and copy all of it into `assets/`, so that
-  `assets/default.xex` exists. This disc's executable is 10,301,440 bytes, CRC32 `A5058079`.
-  See [`assets/README.md`](../assets/README.md).
+  `assets/default.xex` exists. This build targets the **USA disc** (title ID `4156081A`): `default.xex` is
+  10,301,440 bytes, CRC32 `A5058079`. See [`assets/README.md`](../assets/README.md).
 
 ## The SDK
 
 Use the **recomp fork** of the SDK ([ElGuslml/rexglue-sdk](https://github.com/ElGuslml/rexglue-sdk), branch `recomp`,
-verified at commit `8feed3a`):
+pinned to commit `8feed3a`):
 it adds the microphone emulation, launcher profiles, launcher options and the gamepad/keyboard handling the launcher
 configures, and the graphics changes NativeXRenderer needs. The official SDK builds and runs the game, but its
 `MicDeviceRequest` stub keeps the game polling for a microphone.
 
-Clone the full source tree next to this repository once (building/installing separately is only needed if you also want a standalone `rexglue` CLI install):
+Clone the full source tree next to this repository once and check out `8feed3a` (newer upstream `recomp` commits
+diverge from `patches/rexglue-sdk-set-remap-gate.patch`; building/installing separately is only needed if you also want
+a standalone `rexglue` CLI install):
 
 ```powershell
-git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp
+git clone -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp
+git -C ../rexglue-sdk-recomp checkout 8feed3a
+git -C ../rexglue-sdk-recomp submodule update --init --recursive
 ```
 
 On Windows, `git clone` leaves the libmspack symlinks (in `thirdparty/libmspack/cabextract/mspack`) as text stubs; if
@@ -55,8 +59,8 @@ tree's working copy in place (leaving it dirty in git). Contributors who also bu
 [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp) against `../rexglue-sdk-recomp` and want to keep that
 sibling tree clean should use an isolated SDK checkout for `GHWorldTourRecomp`:
 
-- **Option A (`thirdparty/rexglue-sdk`):** clone the SDK inside this repository (`git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git thirdparty/rexglue-sdk`). CMake automatically prefers `thirdparty/rexglue-sdk` over `../rexglue-sdk-recomp` when `REXSDK_DIR` is not set.
-- **Option B (`REXSDK_DIR`):** clone to any separate folder and pass `-DREXSDK_DIR=<path>` when configuring (`cmake --preset win-amd64-release -DREXSDK_DIR=C:/path/to/rexglue-sdk-ghwt`).
+- **Option A (`thirdparty/rexglue-sdk`):** clone the SDK inside this repository and pin to `8feed3a` (`git clone -b recomp https://github.com/ElGuslml/rexglue-sdk.git thirdparty/rexglue-sdk`, then `git -C thirdparty/rexglue-sdk checkout 8feed3a` and `git -C thirdparty/rexglue-sdk submodule update --init --recursive`). CMake automatically prefers `thirdparty/rexglue-sdk` over `../rexglue-sdk-recomp` when `REXSDK_DIR` is not set.
+- **Option B (`REXSDK_DIR`):** clone to any separate folder (checking out `8feed3a` and running `git submodule update --init --recursive`) and pass `-DREXSDK_DIR=<path>` when configuring (`cmake --preset win-amd64-release -DREXSDK_DIR=C:/path/to/rexglue-sdk-ghwt`).
 
 All three `patches/*.patch` applications check `git apply --reverse --check` before applying, so re-running
 `cmake --preset` is idempotent. Each applied patch is also recorded inside the target checkout's `.git` directory so
@@ -91,7 +95,7 @@ rexglue codegen ghworldtour_manifest.toml
 ## Running
 
 ```powershell
-.\out\build\win-amd64-release\GH World Tour Launcher.exe
+& ".\out\build\win-amd64-release\GH World Tour Launcher.exe"
 ```
 
 - The launcher's first run extracts the game files from your ISO into `assets/` next to it, or uses the repository's
@@ -103,13 +107,16 @@ rexglue codegen ghworldtour_manifest.toml
 - Command-line options (`--name=value`, for example Steam launch options) override everything; the launcher's choices
   are in `ghworldtour_options.toml`, loaded after the base `ghworldtour.toml`.
 - GHWT refuses a plain gamepad in its guitar modes. The app reports every plain controller (and the keyboard's pad)
-  as a guitar (`gamepad_subtype = 6`) and rests its whammy bar (`gamepad_whammy_rest = true`), unless the command line
-  or the launcher's options say otherwise. A drum kit is `--gamepad_subtype=8`.
-- When multiple controllers are connected, the app defaults `signin_ui_cancel = true` and `signin_guests = true`
-  (`src/ghworldtour_app.h`), while still allowing `ghworldtour.toml`, `ghworldtour_options.toml`, or command-line
-  overrides (`--signin_ui_cancel=false`, `--signin_guests=false`): without `signin_ui_cancel`, pressing a button on
-  an unsigned-in second controller at the post-intro title screen leaves the game waiting on an empty menu backdrop;
-  with `signin_guests`, extra controllers join as local guests of the active profile.
+  as a guitar (`gamepad_subtype = 6`, verified in `ghworldtour_057.log` as `XInput subtype 6 (PS4 Controller)` and
+  `ghworldtour_087.log` as `XInput subtype 6 (Xbox 360 Controller)`) and rests its whammy bar
+  (`gamepad_whammy_rest = true`), unless the command line or the launcher's options say otherwise. A drum kit is
+  `--gamepad_subtype=8`.
+- When multiple controllers are connected, controller slot 0 owns the active profile and saves, and the app defaults
+  `signin_ui_cancel = true` and `signin_guests = true` (`src/ghworldtour_app.h`), while still allowing `ghworldtour.toml`,
+  `ghworldtour_options.toml`, or command-line overrides (`--signin_ui_cancel=false`, `--signin_guests=false`): without
+  `signin_ui_cancel`, pressing a button on an unsigned-in second controller at the post-intro title screen leaves the
+  game waiting on an empty menu backdrop; with `signin_guests`, extra controllers join as local guests of the active
+  profile.
 
 ## Audio
 
@@ -148,6 +155,7 @@ The corrections currently in `ghworldtour_functions.toml`:
 - `0x82196808`, the second thunk in `sub_821967F8`'s range, which the intro cards call.
 - `0x82241060`, the function between `sub_82241038` (which ends exactly there) and `sub_82241078`, called when
   starting Quick Play.
+- `0x82131658`, the song-frame mid-assembly hook (`src/input_gates.cpp`) gating tap-strum and controller remap to songs.
 
 ## Auto-strum
 
@@ -159,7 +167,8 @@ a strum bar. It is on by default for a fresh install (`kKeyboardTapDefault` / `k
 The menus move their cursor with the D-pad, so the strum is gated to songs: `src/input_gates.cpp` hooks
 `sub_82131658`, the per-player update GHWT runs every frame in a song (the equivalent of GH Metallica's
 `sub_82137F18`; both call their `sub_8213AB08`/`sub_821416A0` first), and opens the gate for 250 ms after each call.
-Verified by log: the hook does not run at the title screen and runs ~60 times a second in a song.
+Verified by log (`ghworldtour_024.log`: `[songgate] hook calls: 1` ... `601`): the hook does not run at the title
+screen and runs ~60 times a second in a song.
 
 ## Controller layout (Guitar Hero III's)
 
@@ -184,13 +193,14 @@ GHWT runs at 60 FPS unless `ghworldtour_frame_rate` is set (120, 144, 160, 165 o
 launcher's frame rate row writes it, and `src/startup.cpp` turns it into `video_mode_refresh_rate`, just under the
 display's rate when V-Sync is off). Boot-checked only: `ghworldtour_frame_rate=120 refresh=60` with frame generation (the
 game runs at half), `ghworldtour_088.log`, and 120 FPS high rate without frame generation: `ghworldtour_frame_rate=120 refresh=120`
-(`ghworldtour_090.log`), logging `[frame rate] script waits in game frames last as at 60 FPS (vblank at 120 Hz)`; pacing in a song
+(`ghworldtour_090.log`, logging `[frame rate] script waits in game frames last as at 60 FPS (vblank at 120 Hz)`, and
+`ghworldtour_119.log`, 2560x1440 DLSS Quality for 13,800+ frames); pacing in a song
 is not measured. The timer frequency is kept stable via `src/timer.cpp` (`[timer] keeping the reported timer frequency (ghworldtour_timer_fix)`,
 `ghworldtour_087.log`). On a display whose refresh rate is not a whole multiple of 60
 (the log: `the timer at 60 Hz: the display 165 Hz is not a whole multiple of it`), V-Sync makes each frame wait in the
 present queue, which is input lag the game's calibration cannot remove. A fresh install therefore defaults V-Sync off
 (`kVsyncDefault = false` in `launcher/game.h`; the launcher writes `d3d12_allow_variable_refresh_rate_and_tearing = true`
-and `vblank_follows_display = false`). Turn it back on in Settings > Video for no tearing.
+and `vblank_follows_display = false`). Turn it back on in **Settings > Graphics** for no tearing.
 
 The launcher's per-game defaults (auto-strum on, V-Sync off) are a tracked patch,
 `patches/recomp_launcher-3.14.0-game-defaults.patch`, applied by CMake on the first configure. Keep
@@ -220,8 +230,8 @@ are in [`native-x-renderer.md`](native-x-renderer.md).
 The renderer is the launcher default (`kNativeXRendererDefault = true` in `launcher/game.h`), while standalone
 `GHWorldTourRecomp.exe` (`src/ghworldtour_app.h`) defaults to `xenos` unless `--native_x_renderer=true` is passed.
 The Xenos path is the fallback, and `--native_x_renderer=false` (or the launcher's renderer row) switches back to it.
-The trace and observer run on the Xenos path: `--native_x_renderer_trace=true --native_x_renderer_observer=true` (F9
-dumps a frame).
+The trace and observer run on the Xenos path: `--native_x_renderer_trace=true --native_x_renderer_verify=true` (F9
+dumps a frame, F10 verifies).
 
 ## Checking a change
 

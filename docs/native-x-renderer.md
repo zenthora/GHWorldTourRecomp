@@ -133,7 +133,8 @@ Verified on this machine (RTX 4070 Ti, Vulkan 1.4):
 - Boot, title, setlist and quickplay render correctly: menus, cover art, per-song art, the note highway, the
   band, the crowd, the HUD and the fret buttons all match the Xenos path.
 - In a song the renderer draws 294-658 calls a frame with 0 failed draws, 0 draws without a target, and
-  0 draws waiting for a pipeline; SMAA is applied on 100 % of frames. SMAA and FXAA act on that copy of the
+  0 draws waiting for a pipeline; SMAA is applied on 100 % of frames (`ghworldtour_039.log`, and in a song in
+  `ghworldtour_124.log`: `antialiasing (SMAA) applied 600 times in 600 frames`). SMAA and FXAA act on that copy of the
   view's depth (there is no output-sized color copy, see "Temporal upscaling and DLAA" below); the game's own
   4x MSAA is what antialiases the scene itself.
 - With `--native_x_renderer_antialiasing=dlaa` in a song: `DLAA applied 600 times in 600 frames`, camera vote
@@ -148,7 +149,7 @@ Verified on this machine (RTX 4070 Ti, Vulkan 1.4):
   (`last_device_`); this engine commits its draw packets in `EndVertices`'s inline store of the device's
   `inline_draw_end` (see the offset table above), and that entry point is not hooked, so no draw packet is
   ever read. This is the next thing to fix if the draw stream ever looks wrong.
-- Presenting scaling (`native_x_renderer_scaling`) was checked with AMD FSR 1: a 1600x900 window with
+- Presenting scaling (`native_x_renderer_scaling`) was checked with AMD FSR 1 (`ghworldtour_046.log`/`ghworldtour_047.log`): a 1600x900 window with
   `--native_x_renderer_resolution_scale=1` logs `scaling: 1280x720 into 1600x900 with AMD FSR 1: 1 EASU
   pass, RCAS` and applies it on every frame, and the title and quickplay screens render correctly. The
   filter only has work to do when the internal resolution is below the window: `native_x_renderer_resolution_scale`
@@ -170,14 +171,17 @@ upscaler takes the depth surface there while the color is the 1280x720 target th
 
 The glow passes, the composite, the HUD and the note highway are drawn after that resolve and stay outside
 the view: they keep their 1:1 pixels and are not reprojected. Verified at 1280x720 in the attract mode and in
-a song (DLAA run `ghworldtour_058`): `DLAA applied 600 times in 600 frames`, camera vote `600 of 600 views
+a song (DLAA runs `ghworldtour_057.log` and `ghworldtour_058.log`, reaching 22,800 frames / ~6 min in song): `DLAA applied 600 times in 600 frames`, camera vote `600 of 600 views
 voted` (188-189 of 195 offers), 294-658 draw calls a frame. FSR 3.1 takes the same boundary
-(`--native_x_renderer_antialiasing=fsr_native`; in a song `ghworldtour_126.log`, see "Interactive verification"). The DLSS *quality* modes
+(`--native_x_renderer_antialiasing=fsr_quality` in `ghworldtour_083.log`: `FSR 3.1: AMD's 3.1.4 upscaler`,
+`FSR 3.1 Quality applied 336 times in 600 frames`; `--native_x_renderer_antialiasing=fsr_native` in a song in
+`ghworldtour_126.log`, see "Interactive verification"). The DLSS *quality* modes
 (`dlss_quality|balanced|performance|ultra_performance`, the 3D view drawn at a reduced size, D121) use it too;
 boot-checked with DLSS Quality (`ghworldtour_090.log`): `antialiasing: DLSS Quality (experimental, D53): the 3D view
 drawn at 853x480 (scale 0.666x0.667), upscaled to 1280x720 by DLSS, with the motion of objects that move on their own;
 the main 3D view and the camera's motion found from the draws (D118, D119)` and `[frame rate] script waits in game
-frames last as at 60 FPS (vblank at 120 Hz)`. In a song at reduced resolution it ran 18,000 frames in
+frames last as at 60 FPS (vblank at 120 Hz)`, and at 2560x1440 / 120 Hz in `ghworldtour_119.log` (13,800+ frames,
+`DLSS Quality applied 600 times in 600 frames`). In a song at reduced resolution it ran 18,000 frames in
 `ghworldtour_125.log` (`tools/runs/nxr-dlss-quality-song`, see "Interactive verification").
 
 The log says which state a frame is in (D139), one line per change that persists half a second: `3D view: upscaled
@@ -296,8 +300,9 @@ sampled intervals (31 samples per log, 677-691 draw calls at most). Run-specific
   above), and confirmed interactively by the user (no captured log for that interactive run).
 - **Non-RTX GPUs (#11).** A GTX, AMD or Intel GPU was not available: every run above is on the RTX 4070 Ti
   (`vendorID 0x10DE`). What these runs add for such cards is AMD FSR 3.1 upscaling (`ghworldtour_126.log`) and AMD
-  FSR 3.1 frame generation (`ghworldtour_128.log`) working in a song with `provider=amd` on this card; the card-side
-  detection and the runtime SMAA fallback on a card without DLSS remain untested on real hardware.
+  FSR 3.1 frame generation (`ghworldtour_128.log`) working in a song with `provider=amd` on this card; `native_x_renderer/src/renderer.cpp`
+  is structured to fall back to `smaa` (`"{} not available, SMAA instead"`) if a temporal upscaler fails `Initialize`,
+  but card-side detection and the runtime SMAA fallback on a card without DLSS remain untested on real hardware.
 
 ### A/B comparison (#17)
 
@@ -315,4 +320,4 @@ show the same frame, so only screens and elements are compared.
 | Temporal artifacts (ghosting, shimmer, doubled notes) with DLSS Quality, FSR Native, DLAA and frame generation | None visible in the stills; stills cannot show them | not assessed |
 
 No NativeXRenderer-only graphical glitch was observed in the stills of the five runs, and none that Xenos has and the
-NativeXRenderer runs lack. The README's "minor remaining graphical glitches" is therefore not itemized by these runs.
+NativeXRenderer runs lack (temporal artifacts in motion cannot be judged from stills).

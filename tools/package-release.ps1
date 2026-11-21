@@ -93,6 +93,117 @@ function Write-HeaderLicenseComment([string]$headerPath, [string]$destPath, [int
     [System.IO.File]::WriteAllLines($destPath, $lines, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Write-DxcLicenseNotice([string]$sdkRoot, [string]$destPath) {
+    $dxcDir = Join-Path $sdkRoot "thirdparty\dxc"
+    $readmePath = Join-Path $dxcDir "README.md"
+    $dxcApiPath = Join-Path $dxcDir "include\dxcapi.h"
+    $dxbcConvPath = Join-Path $dxcDir "include\DxbcConverter.h"
+    foreach ($req in @($readmePath, $dxcApiPath, $dxbcConvPath)) {
+        if (-not (Test-Path -LiteralPath $req -PathType Leaf)) {
+            throw "Required DXC license source missing: $req"
+        }
+    }
+
+    $readmeText = (Get-Content -LiteralPath $readmePath -Raw).Trim()
+    $dxcApiNotice = ((Get-Content -LiteralPath $dxcApiPath -TotalCount 11) -join "`n").Trim()
+    $dxbcConvNotice = ((Get-Content -LiteralPath $dxbcConvPath -TotalCount 10) -join "`n").Trim()
+    $vendoredLicense = Join-Path $dxcDir "LICENSE.TXT"
+    if (Test-Path -LiteralPath $vendoredLicense -PathType Leaf) {
+        $uiucLicense = (Get-Content -LiteralPath $vendoredLicense -Raw).Trim()
+    } else {
+        # Vendored SDK tree keeps README.md + header notices without LICENSE.TXT; include the verbatim
+        # University of Illinois/NCSA Open Source License from microsoft/DirectXShaderCompiler@6b6f40200b.
+        $uiucLicense = @'
+==============================================================================
+LLVM Release License
+==============================================================================
+University of Illinois/NCSA
+Open Source License
+
+Copyright (c) 2003-2015 University of Illinois at Urbana-Champaign.
+All rights reserved.
+
+Developed by:
+
+    LLVM Team
+
+    University of Illinois at Urbana-Champaign
+
+    http://llvm.org
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal with
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+    * Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimers.
+
+    * Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimers in the
+      documentation and/or other materials provided with the distribution.
+
+    * Neither the names of the LLVM Team, University of Illinois at
+      Urbana-Champaign, nor the names of its contributors may be used to
+      endorse or promote products derived from this Software without specific
+      prior written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+CONTRIBUTORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'@
+    }
+
+    $combined = "$readmeText`n`n$dxcApiNotice`n`n$dxbcConvNotice`n`n$uiucLicense`n"
+    [System.IO.File]::WriteAllText($destPath, $combined, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Write-DisruptorPlusLicense([string]$sdkRoot, [string]$destPath) {
+    $dpDir = Join-Path $sdkRoot "thirdparty\disruptorplus"
+    $headerPath = Join-Path $dpDir "include\disruptorplus\ring_buffer.hpp"
+    if (-not (Test-Path -LiteralPath $headerPath -PathType Leaf)) {
+        throw "Required disruptorplus header missing: $headerPath"
+    }
+    foreach ($candidate in @("LICENSE.txt", "LICENSE")) {
+        $candPath = Join-Path $dpDir $candidate
+        if (Test-Path -LiteralPath $candPath -PathType Leaf) {
+            Copy-RequiredFile $candPath $destPath
+            return
+        }
+    }
+    # Vendored SDK tree omits LICENSE.txt; ship the verbatim MIT license from lewissbaker/disruptorplus.
+    $mitText = @'
+The MIT License (MIT)
+
+Copyright (c) 2013 Lewis Baker
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+'@ + "`n"
+    [System.IO.File]::WriteAllText($destPath, $mitText, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Write-Sha256File([string]$filePath) {
     $hash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $name = Split-Path -Leaf $filePath
@@ -230,6 +341,7 @@ $licenseMap = @{
     "AMD-FidelityFX-SDK.txt"             = Join-Path $nxrDir "thirdparty\ffx_api\LICENSE.txt"
     "Barlow-fonts.txt"                   = Join-Path $resolvedSdk "resources\fonts\OFL.txt"
     "CLI11.txt"                          = Join-Path $resolvedSdk "thirdparty\cli11\LICENSE"
+    "cppDES.txt"                         = Join-Path $resolvedSdk "thirdparty\crypto\des\LICENSE"
     "Dear-ImGui.txt"                     = Join-Path $resolvedSdk "thirdparty\imgui\LICENSE.txt"
     "DiligentCore.txt"                   = Join-Path $nxrDir "thirdparty\diligent-core\License.txt"
     "FFmpeg-LGPL-2.1.txt"                = Join-Path $resolvedSdk "thirdparty\FFmpeg\COPYING.LGPLv2.1"
@@ -273,6 +385,13 @@ foreach ($entry in $licenseMap.GetEnumerator()) {
 }
 
 Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\renderdoc\renderdoc_app.h") (Join-Path $licensesDir "RenderDoc-API.txt") 24
+Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\crypto\TinySHA1.hpp") (Join-Path $licensesDir "TinySHA1.txt") 24
+Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\dxbc\DXBCChecksum.cpp") (Join-Path $licensesDir "DXBCChecksum-RSA-MD5.txt") 72
+Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\crypto\sha256.h") (Join-Path $licensesDir "sha256.txt") 6
+Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\crypto\rijndael-alg-fst.h") (Join-Path $licensesDir "rijndael-alg-fst.txt") 25
+Write-HeaderLicenseComment (Join-Path $resolvedSdk "thirdparty\pe\pe_image.h") (Join-Path $licensesDir "pe_image.txt") 4
+Write-DxcLicenseNotice $resolvedSdk (Join-Path $licensesDir "DirectXShaderCompiler-DXC.txt")
+Write-DisruptorPlusLicense $resolvedSdk (Join-Path $licensesDir "disruptorplus.txt")
 $stbLines = Get-Content -LiteralPath (Join-Path $resolvedSdk "thirdparty\stb\stb_image.h") | Select-Object -Last 41
 [System.IO.File]::WriteAllLines((Join-Path $licensesDir "stb_image.txt"), $stbLines, [System.Text.UTF8Encoding]::new($false))
 

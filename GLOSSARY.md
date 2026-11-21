@@ -29,11 +29,11 @@ _Avoid_: Patch, detour, raw hook
 ### Rendering & Shaders
 
 **Launcher Default Renderer**:
-The primary host graphics path (`NativeXRenderer`) enabled by default for players through the launcher, translating game draw calls directly to Direct3D 12 or Vulkan with native upscaling and frame generation support.
+The primary host graphics path (`NativeXRenderer`) enabled by default for players through the launcher, translating game draw calls directly to Vulkan (via DiligentCore) with native upscaling and frame generation support.
 _Avoid_: Default Xenos path, fallback renderer
 
 **Diagnostic Fallback Renderer**:
-The SDK's built-in Xenos GPU emulation path used as a compatibility fallback and as the required baseline for draw tracing and observer verification.
+The SDK's built-in Xenos GPU emulation path (Direct3D 12 by default, or Vulkan) used as a compatibility fallback and as the required baseline for draw tracing and observer verification.
 _Avoid_: Default renderer, native renderer
 
 **Main 3D View**:

@@ -30,7 +30,9 @@ endif()
 
 # Locate the SDK. NativeXRenderer compiles the SDK's graphics sources (the SPIR-V translator among them)
 # in process, and an installed SDK package does not carry those sources, so the recomp fork's source tree
-# is used: REXSDK_DIR when set, thirdparty/rexglue-sdk when present, or the sibling rexglue-sdk-recomp.
+# (ElGuslml/rexglue-sdk, branch recomp, pinned to commit 8feed3a) is used: REXSDK_DIR when set,
+# thirdparty/rexglue-sdk when present, or the sibling rexglue-sdk-recomp.
+set(GHWORLDTOUR_SDK_COMMIT "8feed3a")
 if(NOT REXSDK_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk/CMakeLists.txt")
     set(REXSDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rexglue-sdk" CACHE PATH
         "Path to the rexglue-sdk source tree" FORCE)
@@ -50,8 +52,12 @@ if(REXSDK_DIR AND NOT IS_ABSOLUTE "${REXSDK_DIR}")
 endif()
 if(NOT REXSDK_DIR OR NOT EXISTS "${REXSDK_DIR}/RECOMP.md")
     message(FATAL_ERROR
-        "The rexglue-sdk recomp source tree was not found. Clone ElGuslml/rexglue-sdk (branch recomp) "
-        "next to this project as rexglue-sdk-recomp, into thirdparty/rexglue-sdk, or set REXSDK_DIR / GHWORLDTOUR_SDK_SOURCE_DIR.")
+        "The rexglue-sdk recomp source tree was not found. Clone ElGuslml/rexglue-sdk "
+        "(branch recomp, pinned commit ${GHWORLDTOUR_SDK_COMMIT}) next to this project as rexglue-sdk-recomp, "
+        "into thirdparty/rexglue-sdk, or set REXSDK_DIR / GHWORLDTOUR_SDK_SOURCE_DIR:\n"
+        "  git clone -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp\n"
+        "  git -C ../rexglue-sdk-recomp checkout ${GHWORLDTOUR_SDK_COMMIT}\n"
+        "  git -C ../rexglue-sdk-recomp submodule update --init --recursive")
 endif()
 message(STATUS "Using the ReXGlue SDK source tree at ${REXSDK_DIR}")
 
@@ -61,9 +67,14 @@ if(WIN32)
 endif()
 set(REXGLUE_USE_VULKAN ON CACHE BOOL "Enable the Vulkan graphics backend")
 
-# Apply tracked GHWorldTourRecomp patches to upstream checkouts (the SDK, NativeXRenderer, and
-# RecompLauncher stay on upstream commits; CMake applies each patch once when configuring).
+# Apply tracked GHWorldTourRecomp patches to upstream checkouts (the SDK at commit 8feed3a,
+# NativeXRenderer, and RecompLauncher stay on upstream commits; CMake applies each patch once when
+# configuring). Optional 4th argument overrides the clean-checkout commit hint shown on apply failure.
 function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
+    set(_expected_hint "For submodules:\n  git submodule update --init --recursive")
+    if(ARGC GREATER 3 AND NOT "${ARGV3}" STREQUAL "")
+        set(_expected_hint "${ARGV3}")
+    endif()
     if(NOT EXISTS "${PATCH_FILE}")
         message(FATAL_ERROR "Missing required patch file: ${PATCH_FILE}")
     endif()
@@ -144,8 +155,8 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
             message(FATAL_ERROR
                 "Could not apply ${PATCH_FILE} (${LABEL}) to clean checkout ${REPO_DIR}:\n"
                 "${GHWT_PATCH_ERROR}\n"
-                "Ensure ${REPO_DIR} is on the expected upstream commit "
-                "(for submodules: git submodule update --init --recursive).")
+                "Ensure ${REPO_DIR} is on the expected upstream commit.\n"
+                "${_expected_hint}")
         endif()
     endif()
 
@@ -155,10 +166,17 @@ function(ghwt_apply_git_patch REPO_DIR PATCH_FILE LABEL)
     message(STATUS "Applied the GHWT ${LABEL} patch to ${REPO_DIR}")
 endfunction()
 
+# Pinned to ElGuslml/rexglue-sdk branch recomp commit 8feed3a; newer recomp commits may conflict with
+# patches/rexglue-sdk-set-remap-gate.patch.
+string(CONCAT _ghwt_sdk_commit_hint
+    "Expected ElGuslml/rexglue-sdk commit ${GHWORLDTOUR_SDK_COMMIT}:\n"
+    "  git -C \"${REXSDK_DIR}\" checkout ${GHWORLDTOUR_SDK_COMMIT}\n"
+    "  git -C \"${REXSDK_DIR}\" submodule update --init --recursive")
 ghwt_apply_git_patch(
     "${REXSDK_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/rexglue-sdk-set-remap-gate.patch"
-    "SDK SetRemapGate")
+    "SDK SetRemapGate"
+    "${_ghwt_sdk_commit_hint}")
 
 include(generated/rexglue.cmake)
 

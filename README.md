@@ -15,34 +15,70 @@ stack — following [GHMetalRecomp](https://github.com/ElGuslml/GHMetalRecomp)'s
 recompile *World Tour* itself (intending to port its songs to *Metallica* instead).
 
 > [!IMPORTANT]
-> You need your own original Xbox 360 copy of *Guitar Hero: World Tour*. This project does not include any of the
-> game's files: make an image (ISO) of your own disc and extract it into `assets/` (see
-> [`assets/README.md`](assets/README.md)). The game, its code and its assets belong to their respective owners.
+> You need your own original **USA Xbox 360** copy of *Guitar Hero: World Tour* (title ID `4156081A`, `default.xex`
+> CRC32 `A5058079`). This project does not include any of the game's files.
+>
+> - **Playing a prebuilt release:** run **`GH World Tour Launcher.exe`** and point it at your ISO — it verifies the
+>   disc and extracts the game into `assets/` automatically on first launch.
+> - **Building from source (or manual extraction):** extract the disc into `assets/` first (see
+>   [`assets/README.md`](assets/README.md)).
+>
+> Not affiliated with Microsoft, Activision or Neversoft. The game, its code and its assets belong to their respective
+> owners.
 
-## Installing a prebuilt release
+## Playing a prebuilt release
+
+### Requirements
+
+- **Windows 10 or 11 (64-bit)** and a CPU with **SSE4.2** (virtually any 64-bit CPU from 2009 onward).
+- A GPU with up-to-date **Vulkan** drivers (`NativeXRenderer`, the launcher default) or **Direct3D 12** drivers
+  (`Xenos` fallback).
+- **[Microsoft Visual C++ Redistributable 2015–2022 (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)** (most PCs
+  already have it; install if Windows reports `MSVCP140.dll` or `VCRUNTIME140.dll` missing).
+- Your own **USA Xbox 360** disc image (ISO) of *Guitar Hero: World Tour* (title ID `4156081A`, `default.xex` CRC32
+  `A5058079`; ~6.3 GB extracted).
+- An Xbox 360 guitar, any standard gamepad, or a keyboard (plus a PC microphone and controller for experimental Vocals).
+
+### Installing and launching
 
 Download the latest release from [Releases](https://github.com/zenthora/GHWorldTourRecomp/releases):
 
-- **Installer (`GHWorldTourRecomp-vX.Y.Z-setup.exe`):** installs for your Windows user without administrator rights (preserving `assets/`, `userdata/`, and `.toml` files across upgrades).
+- **Installer (`GHWorldTourRecomp-vX.Y.Z-setup.exe`):** installs for your Windows user without administrator rights
+  (preserving `assets/`, `userdata/`, and `.toml` files across upgrades).
 - **Portable archive (`GHWorldTourRecomp-vX.Y.Z-win64.zip`):** extract to a writable folder (not `Program Files`).
 
-Run **`GH World Tour Launcher.exe`**. On first launch it asks for your Xbox 360 ISO, extracts the game into `assets/`, and creates your profile; subsequent updates can be installed directly from the launcher's **Updates** tab.
+> [!NOTE]
+> **Windows SmartScreen ("Unknown publisher"):** Release executables are not code-signed. With the portable `.zip`,
+> right-click the archive → **Properties** → check **Unblock** → **OK** before extracting; otherwise click **More
+> info** → **Run anyway** once per executable.
 
-## Building
+Run **`GH World Tour Launcher.exe`**. On first launch it asks for your USA Xbox 360 ISO, verifies and extracts the game
+into `assets/`, and creates your profile; subsequent updates can be installed directly from the launcher's **Updates**
+tab. If you prefer to extract the files manually (for example with `extract-xiso`), see
+[`assets/README.md`](assets/README.md).
+
+## Building from source
 
 Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build this), the Windows SDK and Python 3.
 
-1. Clone the recomp fork of the SDK next to this repository as `../rexglue-sdk-recomp` (verified at `ElGuslml/rexglue-sdk` `recomp` commit `8feed3a`):
+1. Clone the recomp fork of the SDK next to this repository as `../rexglue-sdk-recomp` and check out the pinned commit
+   `8feed3a` (newer `recomp` commits diverge from `patches/rexglue-sdk-set-remap-gate.patch`):
 
    ```powershell
-   git clone --recursive -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp
+   git clone -b recomp https://github.com/ElGuslml/rexglue-sdk.git ../rexglue-sdk-recomp
+   git -C ../rexglue-sdk-recomp checkout 8feed3a
+   git -C ../rexglue-sdk-recomp submodule update --init --recursive
    ```
+
+   On Windows, `git` may leave `libmspack` symlinks (under `thirdparty/libmspack/cabextract/mspack`) as text stubs; if
+   the build fails on them, see [`docs/development.md`](docs/development.md#the-sdk).
 
    `GHWorldTourRecomp` builds the SDK directly from this full source tree (an installed `cmake --install` package alone
    is not sufficient because `NativeXRenderer` compiles the SDK's graphics sources in process and links its `glslang`
-   and `xxHash` targets). Running
-   `cmake --preset win-amd64 && cmake --build --preset win-amd64-release --parallel 8 && cmake --install out/build/win-amd64 --config Release`
-   inside `../rexglue-sdk-recomp` is only needed if you also want a standalone `rexglue` CLI install.
+   and `xxHash` targets). Running `cmake --preset win-amd64`,
+   `cmake --build --preset win-amd64-release --parallel 8`, and
+   `cmake --install out/build/win-amd64 --config Release` inside `../rexglue-sdk-recomp` is only needed if you also
+   want a standalone `rexglue` CLI install.
 
    Configuring CMake patches the selected SDK checkout in place; if you share `../rexglue-sdk-recomp` with
    `GHMetalRecomp` and want to keep it clean, see
@@ -54,7 +90,8 @@ Requirements: Git, CMake 3.25+, Ninja, LLVM/Clang (MSVC alone does not build thi
    git submodule update --init --recursive
    ```
 
-3. Build the game and the launcher (the game's files must be in `assets/` first):
+3. Extract your USA disc into `assets/` (see [`assets/README.md`](assets/README.md)), then configure and build the game
+   and launcher:
 
    ```powershell
    cmake --preset win-amd64-release
@@ -67,26 +104,70 @@ application, and stamp reversal are documented in [docs/development.md](docs/dev
 
 ## Running
 
+From a source build, start the launcher:
+
 ```powershell
-.\out\build\win-amd64-release\GH World Tour Launcher.exe
+& ".\out\build\win-amd64-release\GH World Tour Launcher.exe"
 ```
 
-- The launcher extracts the game from your ISO on first run, keeps the video/audio/controller settings and the
-  profiles, and starts the game.
+- The launcher keeps video, audio, and controller settings (`ghworldtour_options.toml`) alongside your profile, extracts
+  the ISO if `assets/` is empty, and launches the game with `NativeXRenderer` enabled by default.
 - `GHWorldTourRecomp.exe` runs the game directly. Game files are found in `assets\` next to the executable, otherwise
   in the repository's `assets\`; `--game_data_root=<folder>` points somewhere else. Logs go to `logs\`.
 
-**Status:** the disc (title ID `4156081A`, 10,301,440-byte `default.xex`) codegens and runs from intro cards and menus into Quick Play and in-song gameplay (`tools/runs/gameplay/` `a-quickplay.png`–`f-song120.png`, [`tools/runs/manual-in-song.png`](tools/runs/manual-in-song.png), [`tools/runs/tour/`](tools/runs/tour/), `ghworldtour_057.log`, and `ghworldtour_058.log` reaching 22,800 frames / ~6 min in song), with a few minor remaining graphical glitches. A plain controller is reported to the game as a guitar (XInput subtype 6, verified in `ghworldtour_057.log` as `XInput subtype 6 (PS4 Controller)` and `ghworldtour_087.log` as `XInput subtype 6 (Xbox 360 Controller)`), avoiding the Guitar Controller warning. Audio mixes FMOD inline on the SDK's audio worker with Pro Audio thread priority by default (`ghworldtour_fmod_on_audio_thread = true`, `audio_callback_min_interval_us = 0`; passing `--ghworldtour_fmod_on_audio_thread=false` restores `3000`; verified in `ghworldtour_087.log`: `[audio] callback spacing 0 us, maxqframes 4, keep_time on, thread priority on, fmod_on_audio_thread on`, `[timer] keeping the reported timer frequency (ghworldtour_timer_fix)`). The launcher's **Strum with the frets** switch (`ghworldtour_auto_strum` default `true`, GHWT has no native auto-strum) gates to songs through the `sub_82131658` song-frame hook (`ghworldtour_024.log`: `[songgate] hook calls: 1` ... `601`). V-Sync defaults off in the launcher profile (`kVsyncDefault = false` in `launcher/game.h`; see [`docs/development.md`](docs/development.md) for launcher, audio, and input-latency details). The analyzer corrections in `ghworldtour_functions.toml` cover seven branch targets, the alternate entry point `0x82213E60` inside `sub_82213E40`, the second thunk `0x82196808` inside `sub_821967F8` (intro cards), `0x82241060` between `sub_82241038` and `sub_82241078` (Quick Play), and the song-frame hook `0x82131658`.
+## Status and features
+
+- **Playability:** The USA disc (title ID `4156081A`) codegens and runs end-to-end from intro cards and menus into Quick
+  Play, Tour, and in-song gameplay. No NativeXRenderer-only graphical differences were observed in A/B stills against
+  the Xenos fallback; see [`docs/native-x-renderer.md`](docs/native-x-renderer.md#state-of-the-integration) for renderer
+  verification logs and open caveats.
+- **Controls & calibration:** Works with Xbox 360 guitars, standard gamepads (reported as a guitar so the game does not
+  block play, with whammy-bar rest handling), and keyboards (default frets `D F J K L`, arrow strum, `Space`/`Backspace`
+  Star Power). **"Strum with the frets"** (`mnk_tap_target` / `gamepad_tap_target`, on by default) and Guitar Hero
+  III-style controller layouts are gated to songs so menus keep normal navigation. Run the game's in-menu audio and
+  video calibration once on first play; see [`res/README.txt`](res/README.txt) or the launcher's **Controls** tab.
+- **Multiple controllers:** When more than one controller is connected, **controller slot 0 owns the active profile and
+  saves**; additional controllers join as local guests (see [`docs/development.md`](docs/development.md#running)).
+- **Audio & input latency:** FMOD mixes inline on the SDK's audio worker by default
+  (`ghworldtour_fmod_on_audio_thread = true`), and V-Sync defaults off in the launcher to avoid present-queue input lag
+  on non-60 Hz displays (toggle in **Settings > Graphics**). See [`docs/development.md`](docs/development.md#audio) and
+  [`docs/development.md`](docs/development.md#input-latency) for details and verification notes.
 
 ### High frame rates, upscaling, and GPU support
 
-- **High-refresh pacing (`ghworldtour_frame_rate`):** The launcher's frame rate setting (`ghworldtour_frame_rate`: `60`, `120`, `144`, `160`, `165`, or `240` in `launcher/game.h`) drives the emulated vertical blank rate (`video_mode_refresh_rate`), while `src/framerate.cpp` (`ghworldtour_frame_rate_fix = true`) hooks frame-counted waits, whammy sustains, loading animations, and skipped-frame inputs. Boot setup at 120 Hz is verified in `ghworldtour_090.log` (`ghworldtour_frame_rate=120 refresh=120`, `[frame rate] script waits in game frames last as at 60 FPS (vblank at 120 Hz)`) and `ghworldtour_119.log` (2560x1440 DLSS Quality at `ghworldtour_frame_rate=120 refresh=120`, 13,800+ frames), whereas **in-song 120 FPS pacing, whammy/loading timing, and `144`/`160`/`165`/`240` Hz modes have not yet been interactively verified** (see [`docs/development.md`](docs/development.md) and [`docs/native-x-renderer.md`](docs/native-x-renderer.md)).
-- **Frame generation (60 FPS base → 120+ FPS shown):** Passing `--native_x_renderer_frame_generation=true` alongside a temporal upscaler (`dlaa`, `dlss_*`, or `fsr_*`) and `ghworldtour_frame_rate` at `120` or higher halves the game's simulation rate (e.g., 60 FPS base simulation for 120 FPS shown) and selects NVIDIA DLSS-G or AMD FSR 3.1 (`native_x_renderer_frame_generation_provider=auto|nvidia|amd`). 2× boot initialization (`ghworldtour_frame_rate=120` → `refresh=60`, `[options] frame generation: 120 FPS shown, the game at 60`) is verified in `ghworldtour_088.log` (`provider=nvidia`) and `ghworldtour_089.log` (`provider=auto`). On an RTX 4070 Ti, **AMD FSR 3.1 frame generation works in a song** (`provider=amd`, `ghworldtour_128.log`: `AMD's 1.1.3 frame interpolation`, 17,105 frames generated over 18,000, 0 `[error]`), and **NVIDIA DLSS-G frame generation works** — verified in attract-mode logs along with its post-`Present()` `provider=auto` AMD fallback (`ghworldtour_140.log` with `fsr_native` + `provider=nvidia`: 99 frames generated at frame 15000; `ghworldtour_142.log` and `ghworldtour_145.log` with `dlaa` + `provider=auto`: `NVIDIA DLSS-G frame interpolation, the view 1280x720, the picture 1280x720 (D142)`, 97 and 83 frames generated at frame 15000, 0 `[error]`; `ghworldtour_143.log` with a simulated evaluate failure under `provider=auto`: `falling back to AMD FidelityFX after NVIDIA DLSS-G failed (provider=auto, D142)` → `AMD's 1.1.3 frame interpolation`, 91 frames generated at frame 15000; fixing the earlier `ghworldtour_127.log` `0xBAD00005` failure) and confirmed interactively by the user (no captured log for that interactive run). The launcher's frame-generation row (`kFrameGenerationRow` in `recomp_launcher/settings.h`) stays hidden until note-highway motion (`AdjustHighwayMotion`) is checked and 120 FPS pacing is interactively verified (see [`docs/native-x-renderer.md`](docs/native-x-renderer.md)).
-- **GPU requirements and non-RTX options:**
-  - **NVIDIA RTX 20+:** Supports NVIDIA DLSS Super Resolution and DLAA (`--native_x_renderer_antialiasing=dlaa|dlss_quality|dlss_balanced|dlss_performance|dlss_ultra_performance`, or **Video > Upscaling: NVIDIA DLSS** with **Quality: Native · DLAA** / **Quality** in the launcher; **Antialiasing** only exposes `SMAA`/`FXAA`/`None` and locks to `"NVIDIA DLSS"` while DLSS is selected, per `recomp_launcher/page_settings.cpp`). Observed in `ghworldtour_057.log`, `ghworldtour_058.log` (`DLAA applied 600 times in 600 frames`), `ghworldtour_090.log`, and `ghworldtour_119.log` (`DLSS Quality applied 600 times in 600 frames`), and in a song at 853x480 → 1280x720 in `ghworldtour_125.log` (`3D view: upscaled at the profile's point 0x824ae0d0`, `DLSS Quality applied 600 times in 600 frames` at frame 18000; see [`docs/native-x-renderer.md`](docs/native-x-renderer.md)).
-  - **NVIDIA RTX 40+ with HAGS:** Required for NVIDIA DLSS-G frame generation (Windows Hardware-Accelerated GPU Scheduling enabled; boot capability/setup checked on an RTX 4070 Ti in `ghworldtour_088.log` and `ghworldtour_089.log`).
-  - **GTX, AMD, and Intel GPUs:** Use **AMD FSR 3.1** (`--native_x_renderer_antialiasing=fsr_native|fsr_quality|fsr_balanced|fsr_performance|fsr_ultra_performance`, or **Video > Upscaling: AMD FSR 3.1** with **Quality** in the launcher; observed in `ghworldtour_083.log`: `FSR 3.1: AMD's 3.1.4 upscaler`, `FSR 3.1 Quality applied 336 times in 600 frames`; in a song in `ghworldtour_126.log`: `3D view: upscaled at the profile's point 0x824ae0d0`, `FSR 3.1 Native AA applied 600 times in 600 frames`), **AMD FSR 1** (`--native_x_renderer_scaling=fsr`, launcher **Video > Upscaling: AMD FSR 1**, observed in `ghworldtour_046.log`/`ghworldtour_047.log`), **NVIDIA Image Scaling (NIS)** (`--native_x_renderer_scaling=nis`, launcher **Video > Upscaling: NVIDIA NIS**), or **SMAA / FXAA** (`--native_x_renderer_antialiasing=smaa|fxaa`, launcher **Video > Antialiasing** when temporal upscaling is off; SMAA observed in `ghworldtour_039.log`: `antialiasing (SMAA) applied 600 times in 600 frames`). Sharpness is tuned with `--native_x_renderer_sharpness`. In code, `native_x_renderer/src/renderer.cpp` is structured to fall back to `smaa` (`"{} not available, SMAA instead"`) if a temporal upscaler fails `Initialize`; physical GTX, AMD, and Intel GPUs and runtime SMAA fallback have not yet been tested: every run above is on an RTX 4070 Ti, so only AMD FSR 3.1 upscaling and frame generation on that card are verified in a song (see [`docs/native-x-renderer.md`](docs/native-x-renderer.md)).
-- **Diagnostic Fallback Renderer:** When reporting graphical glitches, compare against the SDK's Xenos emulation path by switching **Renderer** in the launcher or passing `--native_x_renderer=false` (with default `d3d12` or `--gpu_backend=vulkan`; see [`docs/native-x-renderer.md`](docs/native-x-renderer.md) for the interactive Xenos D3D12 run (`ghworldtour_123.log`, `tools/runs/xenos-d3d12-song`: loading screen, Quick Play, in-song, 0 `[error]`; the earlier `D3D12Presenter` swap-chain failure is `ghworldtour_121.log`) and the A/B comparison of it against five NativeXRenderer runs.
+- **High-refresh pacing (`ghworldtour_frame_rate`):** The launcher offers `60`, `120`, `144`, `160`, `165`, and `240`
+  FPS in **Settings > Graphics**, with frame-rate timing fixes enabled by default. Boot at 120 Hz has been checked,
+  while **in-song 120 FPS pacing, whammy/loading timing, and `144`/`160`/`165`/`240` Hz modes have not yet been
+  interactively verified** (see [`docs/development.md`](docs/development.md#input-latency) and
+  [`docs/native-x-renderer.md`](docs/native-x-renderer.md)).
+- **Frame generation (60 FPS base → 120+ FPS shown):** Passing `--native_x_renderer_frame_generation=true` alongside a
+  temporal upscaler (`dlaa`, `dlss_*`, or `fsr_*`) and `ghworldtour_frame_rate` at `120` or higher halves the game's
+  simulation rate and interpolates via NVIDIA DLSS-G or AMD FSR 3.1
+  (`--native_x_renderer_frame_generation_provider=auto|nvidia|amd`). Both AMD FSR 3.1 and NVIDIA DLSS-G frame generation
+  have been verified on an RTX 4070 Ti; the launcher's frame-generation row stays hidden until note-highway motion
+  tracking and 120 FPS in-song pacing are fully verified (see
+  [`docs/native-x-renderer.md`](docs/native-x-renderer.md#frame-generation-and-the-note-highway)).
+- **GPU requirements and options:**
+  - **NVIDIA RTX 20+:** Supports NVIDIA DLSS Super Resolution and DLAA (**Settings > Video > Upscaling: NVIDIA DLSS**
+    with **Quality: Native · DLAA** / **Quality**, or
+    `--native_x_renderer_antialiasing=dlaa|dlss_quality|dlss_balanced|dlss_performance|dlss_ultra_performance`; while
+    DLSS is active, **Settings > Graphics > Antialiasing** locks to `"NVIDIA DLSS"`).
+  - **NVIDIA RTX 40+ with HAGS:** Required for NVIDIA DLSS-G frame generation (Windows Hardware-Accelerated GPU
+    Scheduling enabled).
+  - **GTX, AMD, and Intel GPUs:** Use **AMD FSR 3.1** (**Settings > Video > Upscaling: AMD FSR 3.1**, or
+    `--native_x_renderer_antialiasing=fsr_native|fsr_quality|fsr_balanced|fsr_performance|fsr_ultra_performance`),
+    **AMD FSR 1** (**Settings > Video > Upscaling: AMD FSR 1**, `--native_x_renderer_scaling=fsr`), **NVIDIA Image
+    Scaling (NIS)** (**Settings > Video > Upscaling: NVIDIA NIS**, `--native_x_renderer_scaling=nis`), or
+    **SMAA / FXAA** (**Settings > Graphics > Antialiasing** when temporal upscaling is off,
+    `--native_x_renderer_antialiasing=smaa|fxaa`). Sharpness is tuned via **Settings > Video** or
+    `--native_x_renderer_sharpness`. Note that every verification run so far used an NVIDIA RTX 4070 Ti (including AMD
+    FSR 3.1 upscaling and frame generation); physical GTX, AMD, and Intel GPUs and the automatic SMAA fallback have not
+    yet been tested on hardware (see
+    [`docs/native-x-renderer.md`](docs/native-x-renderer.md#interactive-verification-2026-11-18)).
+- **Diagnostic Fallback Renderer:** When reporting graphical glitches, compare against the SDK's Xenos emulation path by
+  switching **Settings > Graphics > Renderer** to **Xenos** in the launcher or passing `--native_x_renderer=false` (with
+  default Direct3D 12, or `--gpu_backend=vulkan`). See [`docs/native-x-renderer.md`](docs/native-x-renderer.md) for the
+  verification logs and Xenos vs. NativeXRenderer comparison.
 
 ## Layout
 

@@ -38,8 +38,8 @@ INSTALLATION
    extracts them from an ISO).
 
 3. Choose your options and press PLAY. Next time you can start GHWorldTourRecomp.exe directly: it uses the
-   options saved by the launcher (pass --native_x_renderer=true if you launch GHWorldTourRecomp.exe directly
-   and want NativeXRenderer without going through the launcher, or set it in ghworldtour.toml).
+   options saved by the launcher (if launching directly without having run the launcher first, pass
+   --native_x_renderer=true or set it in ghworldtour.toml to use NativeXRenderer).
 
 4. Calibrate: in the game's options, run the audio and video calibration once, so that the notes match what
    you hear on your speakers or headphones.
@@ -75,6 +75,8 @@ when you press PLAY.
     navigation). Each controller keeps its own assignments, including Guitar Hero III-style trigger
     mappings gated to songs.
   - Keyboard: frets default to D F J K L, Up/Down strum, Space/Backspace Star Power, Return/X Start.
+  - Multiple controllers: controller slot 0 owns the active profile and saves; extra controllers join as
+    local guests.
   - Microphone: select a PC microphone for Vocals (experimental).
 - Video / Graphics: choose NativeXRenderer (default in the launcher) or Xenos fallback, upscaling (AMD FSR
   3.1, NVIDIA DLSS/DLAA on RTX GPUs), antialiasing (SMAA/FXAA when upscaler is off), and target frame
@@ -86,8 +88,9 @@ when you press PLAY.
 
 STEAM BIG PICTURE
 
-Add GHWorldTourRecomp.exe as a non-Steam game (with --native_x_renderer=true if desired) to launch straight
-into the game, or add "GH World Tour Launcher.exe" to change options with a controller before playing.
+Add GHWorldTourRecomp.exe as a non-Steam game (pass --native_x_renderer=true if launching directly without
+having run the launcher first) to launch straight into the game, or add "GH World Tour Launcher.exe" to
+change options with a controller before playing.
 
 
 FILES

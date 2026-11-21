@@ -44,7 +44,7 @@ With `--native_x_renderer=true`, NativeXRenderer logs one line when the 3D view'
 - `3D view: upscaled at the profile's point 0x824ae0d0` — DLSS/FSR 3.1 ran on the view (only with a temporal mode).
 
 `renderer: frame N: D draw calls` is the other state signal: menus and attract screens stay under ~150,
-a song runs 290-660. `--native_x_renderer_trace_interval=60` (instead of the default 600) prints it every
+a song runs 290-660. `--native_x_renderer_trace_interval=60` (instead of the default 300) prints it every
 second, which makes a scenario run readable while it happens.
 
 ## Frame timing
@@ -57,9 +57,10 @@ elevated terminal (or with `--restart_as_admin`), for example:
 PresentMon_x64.exe --process_name GHWorldTourRecomp.exe --timed 15 --output_file pm.csv --no_console_stats
 ```
 
-GHWT is 60 FPS only. The display refresh is logged at startup; a rate that is not a whole multiple of 60
-(`the timer at 60 Hz: the display 165 Hz is not a whole multiple of it`) is why V-Sync defaults off for
-this game (`kVsyncDefault` in `launcher/game.h`).
+GHWT defaults to 60 FPS (`ghworldtour_frame_rate` also exposes experimental 120, 144, 160, 165, and 240 Hz modes
+via `src/framerate.cpp`). The display refresh is logged at startup; at the default 60 FPS, a rate that is not a
+whole multiple of 60 (`the timer at 60 Hz: the display 165 Hz is not a whole multiple of it`) is why V-Sync defaults
+off for this game (`kVsyncDefault` in `launcher/game.h`).
 
 ## Audio endpoint
 
